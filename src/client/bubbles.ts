@@ -25,6 +25,8 @@ interface Bubble {
   phase: number;
   votes: number;
   leading: boolean;
+  /** Position in the tally (0 = most votes); decides stacking. */
+  rank: number;
   /** Set when the song left the pool; animates out then gets disposed. */
   leaving?: { won: boolean; since: number };
   cand: Candidate;
@@ -74,6 +76,7 @@ export class BubbleField {
       }
       b.cand = c;
       b.target = radiusFor(c.votes);
+      this.stack(b, i);
       if (b.votes !== c.votes || b.leading !== (leader === c.song.id)) {
         b.votes = c.votes;
         b.leading = leader === c.song.id;
@@ -81,7 +84,11 @@ export class BubbleField {
       }
     });
     for (const b of this.bubbles.values()) {
-      if (!seen.has(b.id) && !b.leaving) b.leaving = { won: winners.has(b.id), since: performance.now() };
+      if (!seen.has(b.id) && !b.leaving) {
+        b.leaving = { won: winners.has(b.id), since: performance.now() };
+        // A winner flies into the pill over everything else.
+        if (b.leaving.won) this.stack(b, -1);
+      }
     }
   }
 
@@ -102,9 +109,9 @@ export class BubbleField {
         transparent: true,
         opacity: 0.24,
         depthWrite: false,
+        depthTest: false,
       }),
     );
-    shell.renderOrder = 2;
 
     const canvas = document.createElement("canvas");
     canvas.width = canvas.height = TEX_SIZE;
@@ -113,14 +120,13 @@ export class BubbleField {
     texture.anisotropy = 4;
     const face = new THREE.Mesh(
       new THREE.CircleGeometry(0.86, 64),
-      new THREE.MeshBasicMaterial({ map: texture, transparent: true, toneMapped: false }),
+      new THREE.MeshBasicMaterial({ map: texture, transparent: true, toneMapped: false, depthTest: false }),
     );
     face.position.z = 0.02;
-    face.renderOrder = 1;
 
     const ring = new THREE.Mesh(
       new THREE.RingGeometry(1.04, 1.12, 96),
-      new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0, toneMapped: false }),
+      new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0, toneMapped: false, depthTest: false }),
     );
 
     group.add(face, shell, ring);
@@ -144,8 +150,10 @@ export class BubbleField {
       phase: Math.random() * Math.PI * 2,
       votes: c.votes,
       leading: false,
+      rank: index,
       cand: c,
     };
+    this.stack(b, index);
     this.bubbles.set(b.id, b);
     this.paint(b);
 
@@ -160,6 +168,18 @@ export class BubbleField {
     };
     img.src = c.song.thumb ?? fallbackThumb(c.song.id);
     return b;
+  }
+
+  /**
+   * Bubbles are drawn in tally order instead of by depth, so overlaps never
+   * intersect: the most-voted bubble is painted last and sits on top.
+   */
+  private stack(b: Bubble, rank: number) {
+    b.rank = rank;
+    const base = (1000 - rank) * 4;
+    b.face.renderOrder = base + 1;
+    b.shell.renderOrder = base + 2;
+    b.ring.renderOrder = base + 3;
   }
 
   /** Draw album art, title and vote count onto the bubble's face texture. */
@@ -261,7 +281,7 @@ export class BubbleField {
       }
 
       const bob = Math.sin(t * 0.9 + b.phase) * 0.12;
-      b.group.position.set(b.pos.x, b.pos.y + bob, Math.sin(t * 0.5 + b.phase) * 0.3);
+      b.group.position.set(b.pos.x, b.pos.y + bob, 0);
       b.group.scale.setScalar(Math.max(b.radius, 0.001));
       b.shell.rotation.y = t * 0.2 + b.phase;
       const ringMat = b.ring.material;
