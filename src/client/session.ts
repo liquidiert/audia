@@ -19,7 +19,35 @@ import {
 import type { AppEvent, DerivedState, SessionConfig, Song } from "../shared/types";
 
 const WASM_URL = "/wasm/audia_gossip_bg.wasm";
-const KEY_STORAGE = "audia.secret";
+/**
+ * Where each role keeps its iroh secret key. The display keeps the original key name,
+ * because its endpoint id is the session's host (only it can end the session).
+ */
+const KEY_STORAGE: Record<"phone" | "display", string> = { display: "audia.secret", phone: "audia.secret.phone" };
+
+/**
+ * One stored identity per role, and only one tab may use it at a time: two endpoints
+ * with the same key (say, the display and a voting page in the same browser) each
+ * skip "themselves" when bootstrapping and confuse the relay. A tab that finds the
+ * identity in use gets a throwaway key instead. The lock is held until the tab closes.
+ */
+async function claimIdentity(role: "phone" | "display"): Promise<{ key?: Uint8Array; persist: boolean }> {
+  const name = KEY_STORAGE[role];
+  const locks = (navigator as Navigator & { locks?: LockManager }).locks; // missing outside secure contexts
+  if (locks) {
+    const claimed = await new Promise<boolean>((resolve) => {
+      locks
+        .request(name, { ifAvailable: true }, (lock) => {
+          resolve(!!lock);
+          return lock ? new Promise<void>(() => {}) : undefined;
+        })
+        .catch(() => resolve(true));
+    });
+    if (!claimed) return { persist: false };
+  }
+  const stored = localStorage.getItem(name);
+  return { key: stored ? fromHex(stored) : undefined, persist: true };
+}
 const logKey = (topic: string) => `audia.log.${topic}`;
 
 export type Status = "starting" | "connecting" | "online" | "offline";
@@ -108,13 +136,14 @@ export class Session {
     opts: { host?: boolean; role?: Role } = {},
   ): Promise<Session> {
     const [offset] = await Promise.all([clockOffset(), init({ module_or_path: WASM_URL })]);
-    const stored = localStorage.getItem(KEY_STORAGE);
-    const node = await AudiaNode.spawn(stored ? fromHex(stored) : undefined);
-    localStorage.setItem(KEY_STORAGE, toHex(node.secretKey()));
+    const role = opts.role ?? "phone";
+    const identity = await claimIdentity(role);
+    const node = await AudiaNode.spawn(identity.key);
+    if (identity.persist) localStorage.setItem(KEY_STORAGE[role], toHex(node.secretKey()));
 
     const cfg = ticket?.cfg ?? newSessionConfig({ epoch: Date.now() + offset });
     if (opts.host && !cfg.host) cfg.host = node.endpointId();
-    const s = new Session(cfg, ticket?.peers ?? [], node, offset, opts.role ?? "phone");
+    const s = new Session(cfg, ticket?.peers ?? [], node, offset, role);
     s.status = "connecting";
     onStatus?.(s);
     s.relay = (await withTimeout(node.online(), 15_000)) ?? node.relayUrl();
