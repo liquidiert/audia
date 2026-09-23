@@ -103,6 +103,18 @@ body.side-collapsed .side-toggle svg { transform: rotate(180deg); }
 .base-current { margin: 0; font-size: 14px; padding: 10px 12px; border-radius: 12px; background: #ffffff08; }
 .base-current b { color: var(--text); }
 .save-actions button.danger-text { color: #ff8a8a; }
+.segmented { border: 0; margin: 0; padding: 0; display: flex; gap: 0; }
+.segmented legend { font-size: 13px; color: var(--muted); padding: 0; margin-bottom: 6px; float: left; width: 100%; }
+.segmented label {
+  flex: 1; display: block; text-align: center; cursor: pointer; font-size: 14px; color: var(--muted);
+  padding: 9px 10px; background: #0d0d14; border: 1px solid #2a2a3c;
+}
+.segmented label:first-of-type { border-radius: 10px 0 0 10px; }
+.segmented label:last-of-type { border-radius: 0 10px 10px 0; border-left: 0; }
+.segmented input { position: absolute; opacity: 0; pointer-events: none; }
+.segmented label:has(input:checked) { color: var(--text); background: linear-gradient(90deg, #ff4f7b33, #7b5cff33); border-color: #7b5cff88; }
+.segmented label:has(input:focus-visible) { outline: 2px solid var(--accent-2); outline-offset: 2px; }
+.segmented:disabled label { cursor: not-allowed; opacity: 0.5; }
 .save-btn {
   font: inherit; font-size: 14px; color: var(--text); cursor: pointer;
   background: #ffffff10; border: 1px solid #ffffff1a; border-radius: 12px; padding: 10px;

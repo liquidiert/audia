@@ -229,6 +229,43 @@ describe("base playlist", () => {
     expect(removed.playlist.every((p) => p.closedAt <= 3000)).toBe(true);
   });
 
+  const order = (ts: number, o: "shuffle" | "ordered", by = "host"): AppEvent => ({
+    k: "base-order", id: `e${n++}`, by, ts, sig: "", order: o,
+  });
+
+  test("shuffle is the default", () => {
+    expect(derive(baseSet(0, ids), c, 1500).baseOrder).toBe("shuffle");
+  });
+
+  test("playlist order plays the list front to back and wraps around", () => {
+    const s = derive([...baseSet(0, ids), order(0, "ordered")], c, 40_500);
+    expect(s.baseOrder).toBe("ordered");
+    expect(s.playlist.slice(0, 7).map((p) => p.song.id)).toEqual(["b1", "b2", "b3", "b4", "b5", "b1", "b2"]);
+  });
+
+  test("switching to playlist order continues after the last base song", () => {
+    // Shuffle for the first songs, then ordered: the next pick follows the last shuffled one.
+    const ev = [...baseSet(0, ids), order(12_000, "ordered")];
+    const s = derive(ev, c, 30_500);
+    const before = s.playlist.filter((p) => p.closedAt <= 12_000);
+    const after = s.playlist.filter((p) => p.closedAt > 12_000);
+    const last = before.at(-1)!.song.id;
+    const expected = ids[(ids.indexOf(last) + 1) % ids.length]!;
+    expect(after[0]!.song.id).toBe(expected);
+  });
+
+  test("ordered skips a song that was just played by vote", () => {
+    // b1 gets voted in first, so the base filler starts at b2 instead of repeating it.
+    const ev = [...baseSet(0, ids), order(0, "ordered"), propose("b1", 10), vote("b1", "u", 20)];
+    // The voted b1 is a 10s song (1000..11000); the filler is queued as it runs out.
+    const s = derive(ev, c, 12_500);
+    expect(s.playlist.slice(0, 2).map((p) => [p.song.id, p.source])).toEqual([["b1", "vote"], ["b2", "base"]]);
+  });
+
+  test("only the host can change the order", () => {
+    expect(derive([...baseSet(0, ids), order(0, "ordered", "guest")], c, 1500).baseOrder).toBe("shuffle");
+  });
+
   test("keepers after the party include played base songs but not unplayed ones", () => {
     const s = derive(baseSet(0, ids), c, 12_500);
     const played = keepers(s.playlist, 12_500).map((x) => x.id);
@@ -280,6 +317,8 @@ describe("protocol", () => {
     const base = { k: "base", id: "1", by: "h", ts: 0, sig: "00", set: "s", part: 0, total: 1, name: "n", songs: [song("a")] };
     expect(validEvent(base, 0)).toBe(true);
     expect(validEvent({ ...base, part: 1 }, 0)).toBe(false);
+    expect(validEvent({ k: "base-order", id: "1", by: "h", ts: 0, sig: "00", order: "ordered" }, 0)).toBe(true);
+    expect(validEvent({ k: "base-order", id: "1", by: "h", ts: 0, sig: "00", order: "random" }, 0)).toBe(false);
     expect(validEvent({ ...base, songs: Array.from({ length: 41 }, (_, i) => song(`s${i}`)) }, 0)).toBe(false);
   });
 });

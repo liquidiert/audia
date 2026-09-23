@@ -73,12 +73,20 @@ export interface BaseEvent extends EventBase {
   songs: Song[];
 }
 
+export type BaseOrder = "shuffle" | "ordered";
+
+/** Host setting: how songs are taken from the base playlist. Latest one wins. */
+export interface BaseOrderEvent extends EventBase {
+  k: "base-order";
+  order: BaseOrder;
+}
+
 /** The host ends the session: nothing after `ts` counts, the music stops. */
 export interface EndEvent extends EventBase {
   k: "end";
 }
 
-export type AppEvent = ProposeEvent | VoteEvent | SkipEvent | BaseEvent | EndEvent;
+export type AppEvent = ProposeEvent | VoteEvent | SkipEvent | BaseEvent | BaseOrderEvent | EndEvent;
 
 /** Messages on the gossip wire (JSON, utf-8). */
 export type WireMessage =
@@ -120,4 +128,6 @@ export interface DerivedState {
   endedAt: number | null;
   /** The base playlist currently in effect, if any. */
   base: { name: string; songs: number } | null;
+  /** How base songs are picked (applies once a base playlist is set). */
+  baseOrder: BaseOrder;
 }

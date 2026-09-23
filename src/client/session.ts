@@ -16,7 +16,7 @@ import {
   validEvent,
   type Ticket,
 } from "../shared/protocol";
-import type { AppEvent, DerivedState, SessionConfig, Song } from "../shared/types";
+import type { AppEvent, BaseOrder, DerivedState, SessionConfig, Song } from "../shared/types";
 
 const WASM_URL = "/wasm/audia_gossip_bg.wasm";
 /**
@@ -220,6 +220,12 @@ export class Session {
       const chunk = songs.slice(part * BASE_PART_SIZE, (part + 1) * BASE_PART_SIZE);
       await this.emit({ k: "base", set, part, total, name: name.slice(0, 200), songs: chunk });
     }
+  }
+
+  /** Shuffle or play the base playlist in its own order (host only). */
+  async setBaseOrder(order: BaseOrder) {
+    if (!this.isHost) throw new Error("Only the display that started this session can change the base playlist");
+    await this.emit({ k: "base-order", order });
   }
 
   get skipThreshold() {

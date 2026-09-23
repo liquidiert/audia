@@ -1,5 +1,6 @@
 import type {
   AppEvent,
+  BaseOrder,
   Candidate,
   DerivedState,
   PlaylistEntry,
@@ -35,9 +36,10 @@ export const DEFAULT_SKIP_VOTES = 5;
  *   songs that hadn't started are dropped.
  * - Base playlist (host only): when a round closes without any voted song and
  *   the queue would run dry before the next round closes, a song from the base
- *   playlist is queued instead. The pick is "random" but seeded by session and
- *   round, so every peer picks the same one; songs that already played are
- *   avoided until the whole list has had its turn.
+ *   playlist is queued instead. With "shuffle" (default) the pick is random but
+ *   seeded by session and round, so every peer picks the same one, and songs
+ *   that already played are avoided until the whole list has had its turn. With
+ *   "ordered" the song after the last base song plays, wrapping at the end.
  */
 export function derive(
   events: Iterable<AppEvent>,
@@ -59,6 +61,7 @@ export function derive(
   const baseParts = new Map<string, Map<number, Extract<AppEvent, { k: "base" }>>>();
   // Declared via `as` so TypeScript doesn't narrow it to `null` (it's assigned inside closures).
   let base = null as { name: string; songs: Song[] } | null;
+  let baseOrder: BaseOrder = "shuffle";
 
   const addBasePart = (e: Extract<AppEvent, { k: "base" }>) => {
     if (!cfg.host || e.by !== cfg.host) return;
@@ -74,6 +77,16 @@ export function derive(
 
   const pickBase = (r: number): Song | null => {
     if (!base) return null;
+    if (baseOrder === "ordered") {
+      const songs = base.songs;
+      const lastBase = playlist.findLast((p) => p.source === "base");
+      const start = lastBase ? songs.findIndex((s) => s.id === lastBase.song.id) + 1 : 0;
+      for (let k = 0; k < songs.length; k++) {
+        const song = songs[(start + k) % songs.length]!;
+        // Don't play the same song twice in a row (e.g. it was just voted in).
+        if (song.id !== playlist.at(-1)?.song.id || songs.length === 1) return song;
+      }
+    }
     const played = new Set(playlist.map((p) => p.song.id));
     let options = base.songs.filter((s) => !played.has(s.id));
     // Everything had its turn: start over, but don't repeat the song that just played.
@@ -103,6 +116,8 @@ export function derive(
     if (e.k === "end") return;
     if (e.k === "base") {
       addBasePart(e);
+    } else if (e.k === "base-order") {
+      if (cfg.host && e.by === cfg.host) baseOrder = e.order;
     } else if (e.k === "skip") {
       skip(e);
     } else if (e.k === "propose") {
@@ -221,6 +236,7 @@ export function derive(
     nowPlaying: current ? { entry: current, positionMs: now - current.startAt } : null,
     endedAt: endedAt !== null && endedAt <= now ? endedAt : null,
     base: base ? { name: base.name, songs: base.songs.length } : null,
+    baseOrder,
   };
 }
 

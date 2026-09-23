@@ -15,7 +15,7 @@ import {
 } from "./youtube";
 import { keepers } from "../shared/state";
 import { newSessionConfig, type Ticket } from "../shared/protocol";
-import type { PlaylistEntry, Song } from "../shared/types";
+import type { BaseOrder, PlaylistEntry, Song } from "../shared/types";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -312,9 +312,14 @@ function baseStatus(text: string, error = false) {
 }
 
 function renderBaseDialog() {
-  const current = session.state().base;
+  const st = session.state();
+  const current = st.base;
+  for (const input of document.querySelectorAll<HTMLInputElement>('input[name="base-order"]')) {
+    input.checked = input.value === st.baseOrder;
+  }
+  $<HTMLFieldSetElement>("base-order").disabled = !session.isHost;
   $("base-current").innerHTML = current
-    ? `Now: <b>${escapeHtml(current.name)}</b> · ${current.songs} songs`
+    ? `Now: <b>${escapeHtml(current.name)}</b> · ${current.songs} songs · ${st.baseOrder === "ordered" ? "in playlist order" : "shuffled"}`
     : "No base playlist yet. Silence when nobody votes.";
   $<HTMLButtonElement>("base-remove").hidden = !current;
   baseGo.textContent = loadedBase ? "Use as base playlist" : "Load";
@@ -373,6 +378,17 @@ baseGo.addEventListener("click", async () => {
   } finally {
     baseGo.disabled = false;
   }
+});
+
+$("base-order").addEventListener("change", async (e) => {
+  const order = (e.target as HTMLInputElement).value as BaseOrder;
+  try {
+    await session.setBaseOrder(order);
+    baseStatus(order === "ordered" ? "Base songs now play in playlist order." : "Base songs are now shuffled.");
+  } catch (err) {
+    baseStatus((err as Error).message, true);
+  }
+  renderBaseDialog();
 });
 
 $("base-remove").addEventListener("click", async () => {

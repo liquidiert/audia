@@ -72,8 +72,10 @@ Public and unlisted playlists work; auto-generated charts and radio mixes can't 
 
 - When a round closes without a voted song and the music would stop before the next round,
   a random song from the base playlist is queued instead. A song with even one vote always wins.
-- Every peer picks the same song, because the choice is seeded by session and round. Songs
-  that already played are avoided until the whole list has had its turn.
+- **Song order** (in the same dialog): *Shuffle* (default) picks a random song that every peer
+  agrees on, because it's seeded by session and round, and avoids repeats until the whole list
+  has had its turn. *Playlist order* plays the song after the last base song and wraps around
+  at the end.
 - Base songs show an "auto" tag. Only the display that started the session can set or remove
   the base playlist, which holds up to 400 songs.
 - The saved playlist and the phones' "Played tonight" list contain only songs that actually
