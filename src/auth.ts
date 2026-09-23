@@ -5,6 +5,8 @@ const MAX_FAILURES = 10;
 const FAIL_WINDOW_MS = 10 * 60_000;
 /** Remember this many verified Authorization headers so argon2 runs once per session, not per request. */
 const CACHE_SIZE = 64;
+/** Bound on tracked clients, so spraying addresses can't grow memory without limit. */
+const MAX_TRACKED_CLIENTS = 10_000;
 
 const sha256 = (s: string) => createHash("sha256").update(s).digest();
 
@@ -75,6 +77,10 @@ export function basicAuth({ user, passwordHash, realm = "audia display", now = D
     }
     const entry = f && now() - f.since < FAIL_WINDOW_MS ? f : { count: 0, since: now() };
     entry.count++;
+    if (!failures.has(client) && failures.size >= MAX_TRACKED_CLIENTS) {
+      for (const [k, v] of failures) if (now() - v.since >= FAIL_WINDOW_MS) failures.delete(k);
+      if (failures.size >= MAX_TRACKED_CLIENTS) failures.delete(failures.keys().next().value!);
+    }
     failures.set(client, entry);
     return challenge();
   }
@@ -82,7 +88,3 @@ export function basicAuth({ user, passwordHash, realm = "audia display", now = D
   return { check, enabled: !!passwordHash };
 }
 
-/** Client address for rate limiting; trusts the first X-Forwarded-For hop (Traefik sets it). */
-export function clientAddress(req: Request, fallback: string | undefined): string {
-  return req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || fallback || "unknown";
-}

@@ -170,10 +170,31 @@ Rebuilding them needs:
 - `wasm-bindgen-cli` at the same version as the `wasm-bindgen` crate (currently 0.2.128)
 - `wasm-opt`, optional, to shrink the output
 
+## Security
+
+- **Access:** the display is behind Basic auth with a salted argon2id hash; guests need the
+  per-session QR cookie (see [Joining](#joining)). Failed logins are rate-limited per client.
+  `X-Forwarded-For` is only trusted from a private-network proxy, and only its right-most entry.
+- **Signed data:** every event is signed with its author's iroh key, and host-only events
+  (base playlist, song order, end) must come from the session's host. Server heartbeats are
+  signed too, so no one can register someone else's peer id or point it at another relay.
+- **Requests:** writes must be same-origin JSON (CSRF protection, since browsers attach Basic
+  auth credentials to cross-site requests too). Bodies are capped at 64 KB, search is
+  rate-limited per client, and untrusted text is sanitised before it's logged.
+- **Headers:** `nosniff`, `X-Frame-Options: DENY`, `frame-ancestors 'none'`, a strict
+  `Referrer-Policy` and `Permissions-Policy`. A full Content-Security-Policy runs in
+  report-only mode, and violations are logged via `/api/csp-report` so it can be enforced once
+  the logs are clean.
+- **Flood limits:** each device caps events per author (600 in total, 60 a minute) and in total
+  (20,000). Live broadcasts must be fresh; older events only arrive through the catch-up sync.
+
 ## Caveats
 
 - Voter ids are per-browser keys, so someone can clear storage to get a new identity. Votes
   are authenticated, but there's no protection against one person using many identities.
+- Event timestamps come from the author's device. A guest running a modified client could
+  backdate votes through the catch-up sync and change the results of rounds that have already
+  closed. Fixing that needs the host to sign each round's result.
 - Round closing uses device clocks. Clients correct for the offset against the serving host's
   clock, but a device with a badly wrong clock can still get votes counted in the wrong round.
 - Some tracks can't be embedded on YouTube. The display marks them and the schedule continues.

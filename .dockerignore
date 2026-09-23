@@ -4,3 +4,5 @@ scripts/build-wasm.sh
 .git
 .audia-session.json
 *.log
+.env
+.env.*

@@ -4,7 +4,19 @@ import { networkInterfaces } from "node:os";
 import YTMusic from "ytmusic-api";
 import vote from "./client/vote.html";
 import display from "./client/display.html";
-import { basicAuth, clientAddress, decodePasswordHash } from "./auth";
+import { basicAuth, decodePasswordHash } from "./auth";
+import {
+  HEARTBEAT_MAX_SKEW_MS,
+  clientAddress,
+  crossSiteRejection,
+  heartbeatMessage,
+  isEndpointId,
+  isRelayUrl,
+  logSafe,
+  rateLimiter,
+  verifyEndpointSignature,
+  withSecurityHeaders,
+} from "./security";
 import {
   gatePage,
   hasJoined,
@@ -21,6 +33,10 @@ import type { Song } from "./shared/types";
 const PORT = Number(process.env.PORT ?? 3000);
 const SESSION_FILE = process.env.AUDIA_SESSION_FILE ?? ".audia-session.json";
 const PEER_TTL_MS = 45_000;
+/** Bound on remembered peers; heartbeats from more than this evict the stalest. */
+const MAX_PEERS = 300;
+/** Largest request body we accept (tickets and heartbeats are a few KB). */
+const MAX_BODY_BYTES = 64 * 1024;
 /** Public OAuth client id for saving playlists to YouTube (optional; not a secret). */
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || null;
 
@@ -35,10 +51,26 @@ if (!auth.enabled) {
 }
 
 type Handler = (req: Request, server: Bun.Server<undefined>) => Response | Promise<Response>;
+const clientOf = (req: Request, server: Bun.Server<undefined>) => clientAddress(req, server.requestIP(req)?.address);
 const guarded =
   (handler: Handler): Handler =>
   async (req, server) =>
-    (await auth.check(req, clientAddress(req, server.requestIP(req)?.address))) ?? handler(req, server);
+    (await auth.check(req, clientOf(req, server))) ?? handler(req, server);
+
+/** Parse a JSON body, or null if it isn't valid JSON. */
+async function readJson<T>(req: Request): Promise<T | null> {
+  try {
+    return (await req.json()) as T;
+  } catch {
+    return null;
+  }
+}
+const badJson = () => Response.json({ error: "invalid JSON" }, { status: 400 });
+
+/** Search hits YouTube on the guest's behalf; keep one client from getting the server's IP blocked. */
+const searchAllowed = rateLimiter({ limit: 30, windowMs: 60_000 });
+/** CSP reports are logged; don't let a flood of them fill the log. */
+const cspReportAllowed = rateLimiter({ limit: 20, windowMs: 60_000 });
 
 /**
  * Bun can't put a check in front of an HTML import route, so the bundled pages live
@@ -127,7 +159,7 @@ async function loadPlaylist(id: string): Promise<{ name: string; songs: Song[] }
 
 // --- Session directory: lets phones that scanned the QR code find the session ---
 
-const label = (t: Ticket) => `"${t.cfg.name}" (${t.cfg.topic.slice(0, 8)}…)`;
+const label = (t: Ticket) => `"${logSafe(t.cfg.name, 60)}" (${t.cfg.topic.slice(0, 8)}…)`;
 
 let session: Ticket | null = null;
 /** Secret in the display's QR code; phones need it (as a cookie) to reach the voting page. */
@@ -158,23 +190,41 @@ const members =
     return Response.json({ error: "Scan the QR code on the display to join." }, { status: 403 });
   };
 
-/** Heartbeat from a peer (phone or display): remember it as a bootstrap candidate. */
+/**
+ * Heartbeat from a peer (phone or display): remember it as a bootstrap candidate.
+ * It must be signed by the endpoint it names, so nobody can register someone else's
+ * id with a bogus relay (which would make phones dial nowhere).
+ */
 const registerPeer: Handler = async (req) => {
-  const body = (await req.json()) as {
+  const body = await readJson<{
     topic?: string;
     id?: string;
     relay?: string;
+    ts?: number;
+    sig?: string;
     role?: string;
     status?: string;
     neighbors?: number;
     visible?: boolean;
     error?: string;
-  };
-  const { topic, id, relay } = body;
-  if (!session || topic !== session.cfg.topic || typeof id !== "string" || id.length > 128) {
-    return Response.json({ ok: false });
+  }>(req);
+  if (!body) return badJson();
+  const { topic, id, relay, ts, sig } = body;
+  if (!session || topic !== session.cfg.topic) return Response.json({ ok: false });
+  if (!isEndpointId(id) || (relay !== undefined && !isRelayUrl(relay))) {
+    return Response.json({ error: "bad peer" }, { status: 400 });
   }
-  peers.set(id, { relay: typeof relay === "string" ? relay : undefined, seen: Date.now() });
+  if (
+    typeof ts !== "number" ||
+    Math.abs(Date.now() - ts) > HEARTBEAT_MAX_SKEW_MS ||
+    typeof sig !== "string" ||
+    !verifyEndpointSignature(id, heartbeatMessage(topic, id, relay ?? "", ts), sig)
+  ) {
+    return Response.json({ error: "bad signature" }, { status: 403 });
+  }
+  peers.delete(id); // re-insert so iteration order is oldest-first
+  peers.set(id, { relay, seen: Date.now() });
+  if (peers.size > MAX_PEERS) peers.delete(peers.keys().next().value!);
   logPeerReport(id, body);
   return Response.json({ ok: true });
 };
@@ -182,7 +232,7 @@ const registerPeer: Handler = async (req) => {
 /** Last diagnostics per peer; only changes are logged. */
 const peerReports = new Map<string, string>();
 function logPeerReport(id: string, b: { role?: string; status?: string; neighbors?: number; visible?: boolean; error?: string }) {
-  const str = (v: unknown, max = 40) => (typeof v === "string" ? v.slice(0, max) : "?");
+  const str = (v: unknown, max = 40) => (typeof v === "string" ? logSafe(v, max) : "?");
   const summary = [
     str(b.role, 10),
     str(b.status, 12),
@@ -210,10 +260,11 @@ function currentTicket(): string | null {
     .filter(([, p]) => now - p.seen < PEER_TTL_MS)
     .sort((a, b) => b[1].seen - a[1].seen)
     .map(([id, p]) => ({ id, relay: p.relay }));
-  // Live peers first, then the session's own bootstrap peers (the display) even if
-  // their heartbeat went quiet: a stale entry is better than handing out no one.
-  const liveIds = new Set(live.map((p) => p.id));
-  const merged = [...live, ...session.peers.filter((p) => !liveIds.has(p.id))].slice(0, 6);
+  // The session's own peers (the display, set with the password) always come first, so
+  // a flood of guest heartbeats can't push it out; then the most recently seen guests.
+  const own = session.peers.slice(0, 2);
+  const ownIds = new Set(own.map((p) => p.id));
+  const merged = [...own, ...live.filter((p) => !ownIds.has(p.id))].slice(0, 6);
   return encodeTicket({ cfg: session.cfg, peers: merged });
 }
 
@@ -224,15 +275,11 @@ function lanUrls(): string[] {
     .map((i) => `http://${i!.address}:${PORT}`);
 }
 
-const server = Bun.serve({
-  port: PORT,
-  hostname: "0.0.0.0",
-  development: process.env.NODE_ENV !== "production",
-  routes: {
+const routes = {
     [VOTE_BUNDLE_PATH]: vote,
     [DISPLAY_BUNDLE_PATH]: display,
-    "/": (req, server) =>
-      !auth.enabled || hasJoined(req, joinToken) ? serveBundle(VOTE_BUNDLE_PATH, req, server) : notJoined(),
+    "/": ((req, server) =>
+      !auth.enabled || hasJoined(req, joinToken) ? serveBundle(VOTE_BUNDLE_PATH, req, server) : notJoined()) as Handler,
     "/display": guarded((req, server) => serveBundle(DISPLAY_BUNDLE_PATH, req, server)),
 
     /** Target of the display's QR code: remember the session's token, then open the voting page. */
@@ -257,7 +304,10 @@ const server = Bun.serve({
 
     "/api/info": guarded(() => Response.json({ lan: lanUrls(), googleClientId: GOOGLE_CLIENT_ID })),
 
-    "/api/search": members(async (req) => {
+    "/api/search": members(async (req, server) => {
+      if (!searchAllowed(clientOf(req, server))) {
+        return Response.json({ error: "Too many searches, slow down a little." }, { status: 429 });
+      }
       const q = new URL(req.url).searchParams.get("q")?.trim().slice(0, 200);
       if (!q) return Response.json([]);
       try {
@@ -291,7 +341,9 @@ const server = Bun.serve({
         return ticket ? Response.json({ ticket }) : Response.json({ error: "no session" }, { status: 404 });
       }),
       PUT: guarded(async (req) => {
-        const t = decodeTicket(((await req.json()) as { ticket?: string }).ticket ?? "");
+        const body = await readJson<{ ticket?: string }>(req);
+        if (!body) return badJson();
+        const t = decodeTicket(body.ticket ?? "");
         if (!t) return Response.json({ error: "bad ticket" }, { status: 400 });
         // A new session gets a new join token, which locks out phones from the old one.
         if (t.cfg.topic !== session?.cfg.topic) {
@@ -330,7 +382,49 @@ const server = Bun.serve({
     "/api/display/peers": { POST: guarded(registerPeer) },
 
     "/api/session/peers": { POST: members(registerPeer) },
-  },
+
+    /** Browsers report Content-Security-Policy violations here (the full policy is report-only for now). */
+    "/api/csp-report": {
+      POST: async (req: Request, server: Bun.Server<undefined>) => {
+        if (cspReportAllowed(clientOf(req, server))) {
+          const r = (await readJson<{ "csp-report"?: Record<string, unknown> }>(req))?.["csp-report"];
+          if (r) console.log(`csp violation: ${logSafe(r["violated-directive"])} blocked ${logSafe(r["blocked-uri"], 120)} on ${logSafe(r["document-uri"], 60)}`);
+        }
+        return new Response(null, { status: 204 });
+      },
+    },
+};
+
+/**
+ * Every route gets the security headers; state-changing requests must come from our
+ * own pages (CSRF). CSP reports are exempt: browsers send them with their own type.
+ */
+function secure(path: string, handler: Handler): Handler {
+  const api = path.startsWith("/api/");
+  return async (req, server) => {
+    const refused = path === "/api/csp-report" ? null : crossSiteRejection(req);
+    return withSecurityHeaders(refused ?? (await handler(req, server)), api);
+  };
+}
+
+const securedRoutes = Object.fromEntries(
+  Object.entries(routes).map(([path, value]) => {
+    if (typeof value === "function") return [path, secure(path, value as Handler)];
+    if (value && typeof value === "object" && !("index" in value) && Object.values(value).every((v) => typeof v === "function")) {
+      return [path, Object.fromEntries(Object.entries(value).map(([m, h]) => [m, secure(path, h as Handler)]))];
+    }
+    return [path, value]; // HTML bundles at their unguessable internal paths
+  }),
+);
+
+const server = Bun.serve({
+  port: PORT,
+  hostname: "0.0.0.0",
+  development: process.env.NODE_ENV !== "production",
+  maxRequestBodySize: MAX_BODY_BYTES,
+  routes: securedRoutes,
+  // Unknown paths: plain 404 with the same headers.
+  fetch: () => withSecurityHeaders(new Response("Not found", { status: 404 })),
 });
 
 console.log(`audia running

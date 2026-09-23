@@ -9,6 +9,7 @@ import {
   encodeTicket,
   encodeWire,
   fromHex,
+  heartbeatMessage,
   newSessionConfig,
   randomId,
   signingBytes,
@@ -19,6 +20,17 @@ import {
 import type { AppEvent, BaseOrder, DerivedState, SessionConfig, Song } from "../shared/types";
 
 const WASM_URL = "/wasm/audia_gossip_bg.wasm";
+/**
+ * Flood limits for the replicated log. Honest guests produce a handful of events a
+ * minute; these stop one misbehaving peer from bloating memory or stalling every
+ * device's reducer. (Peers may disagree about an abuser's excess events, never an
+ * honest guest's.) The host is exempt: its base playlist alone can be 10 events.
+ */
+const MAX_EVENTS_PER_AUTHOR = 600;
+const MAX_EVENTS_PER_AUTHOR_PER_MINUTE = 60;
+const MAX_EVENTS_TOTAL = 20_000;
+/** Live broadcasts must be fresh; older events only arrive through the catch-up sync. */
+const LIVE_EVENT_MAX_AGE_MS = 2 * 60_000;
 /**
  * Where each role keeps its iroh secret key. The display keeps the original key name,
  * because its endpoint id is the session's host (only it can end the session).
@@ -106,13 +118,12 @@ export class Session {
   ) {}
 
   /**
-   * Find the session to join: URL hash first, then the serving host's current session.
+   * Find the serving host's current session. (Tickets in the URL are deliberately not
+   * accepted: a crafted link could otherwise point a device at an attacker's session.)
    * Returns null only when there is no session. For the display, any other failure
    * throws: silently founding a new session would strand every phone on the old one.
    */
   static async findTicket(role: Role = "phone"): Promise<Ticket | null> {
-    const fromHash = decodeTicket(location.hash.slice(1));
-    if (fromHash) return fromHash;
     let res: Response;
     try {
       res = await fetch(ENDPOINTS[role].session);
@@ -280,7 +291,7 @@ export class Session {
     switch (ev.type) {
       case "received": {
         const msg = decodeWire(ev.content!);
-        if (msg) this.ingest(msg.e);
+        if (msg) this.ingest(msg.e, msg.t === "ev");
         break;
       }
       case "neighborUp":
@@ -326,12 +337,29 @@ export class Session {
     await this.channel.broadcast(encodeWire({ t: "ev", e: [e] }));
   }
 
-  private ingest(events: unknown[]) {
+  private perAuthor = new Map<string, number[]>();
+
+  /** Room for another event from this author (host exempt), counting its timestamps. */
+  private withinLimits(e: AppEvent): boolean {
+    if (e.by === this.cfg.host) return true;
+    if (this.events.size >= MAX_EVENTS_TOTAL) return false;
+    const times = this.perAuthor.get(e.by) ?? [];
+    if (times.length >= MAX_EVENTS_PER_AUTHOR) return false;
+    const recent = times.filter((t) => Math.abs(t - e.ts) < 60_000).length;
+    if (recent >= MAX_EVENTS_PER_AUTHOR_PER_MINUTE) return false;
+    times.push(e.ts);
+    this.perAuthor.set(e.by, times);
+    return true;
+  }
+
+  private ingest(events: unknown[], live = false) {
     const now = this.now();
     let added = 0;
     for (const e of events) {
       if (!validEvent(e, now) || this.events.has(e.id)) continue;
+      if (live && now - e.ts > LIVE_EVENT_MAX_AGE_MS) continue;
       if (!verify(e.by, signingBytes(e), fromHex(e.sig))) continue;
+      if (!this.withinLimits(e)) continue;
       this.events.set(e.id, e);
       added++;
     }
@@ -365,6 +393,7 @@ export class Session {
 
   /** Tell the serving host we're alive so it can hand us out as a bootstrap peer. */
   private heartbeat() {
+    const ts = Math.round(this.now());
     fetch(ENDPOINTS[this.role].peers, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -372,6 +401,9 @@ export class Session {
         topic: this.cfg.topic,
         id: this.id,
         relay: this.relay,
+        // Signed, so nobody can register our id with a different relay.
+        ts,
+        sig: toHex(this.node.sign(new TextEncoder().encode(heartbeatMessage(this.cfg.topic, this.id, this.relay ?? "", ts)))),
         // Diagnostics for the server log: how this peer sees the swarm.
         role: this.role,
         status: this.status,

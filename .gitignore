@@ -3,3 +3,5 @@ crates/*/target
 .audia-session.json
 *.log
 .DS_Store
+.env
+.env.*

@@ -15,6 +15,10 @@ export function randomId(bytes = 12): string {
   return toHex(crypto.getRandomValues(new Uint8Array(bytes)));
 }
 
+/** What a peer signs in its heartbeat, so nobody can register someone else's endpoint id or relay. */
+export const heartbeatMessage = (topic: string, id: string, relay: string, ts: number) =>
+  `audia-heartbeat|${topic}|${id}|${relay}|${ts}`;
+
 /** Songs per `base` event; keeps each event around 10 KB, well inside a gossip frame. */
 export const BASE_PART_SIZE = 40;
 /** Largest base playlist accepted (parts × part size). */
