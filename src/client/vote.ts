@@ -1,5 +1,5 @@
 import { Session, escapeHtml, fmtTime, installThumbFallback } from "./session";
-import { votesOf } from "../shared/state";
+import { keepers, votesOf } from "../shared/state";
 import type { Song } from "../shared/types";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -50,9 +50,36 @@ function renderLists() {
   const now = session.now();
   const upcoming = st.playlist.filter((p) => p.startAt > now);
   // Only touch the DOM when something visible changed, so taps don't hit replaced buttons.
-  const sig = JSON.stringify([st.candidates.map((c) => [c.song.id, c.votes]), [...mine], upcoming.map((p) => p.startAt)]);
+  const sig = JSON.stringify([
+    st.endedAt,
+    st.candidates.map((c) => [c.song.id, c.votes]),
+    [...mine],
+    upcoming.map((p) => p.startAt),
+  ]);
   if (sig === lastSig) return;
   lastSig = sig;
+
+  const ended = st.endedAt !== null;
+  document.body.classList.toggle("session-ended", ended);
+  $("ended").hidden = !ended;
+  if (ended) {
+    const played = keepers(st.playlist);
+    $("ended-list").innerHTML = played.length
+      ? played
+          .map(
+            (s) => `
+      <li class="song">
+        ${thumb(s)}
+        <div class="meta">
+          <div class="title">${escapeHtml(s.title)}</div>
+          <div class="artist">${escapeHtml(s.artist)}</div>
+        </div>
+      </li>`,
+          )
+          .join("")
+      : `<p class="muted">No songs made it this time.</p>`;
+    return;
+  }
   const max = Math.max(1, ...st.candidates.map((c) => c.votes));
 
   votesLeft.textContent = `${mine.size} / ${session.cfg.maxVotes} votes`;
@@ -119,7 +146,9 @@ function tick() {
   const st = session.state();
   const now = session.now();
   const left = st.round.endsAt - now;
-  roundEl.innerHTML = st.round.held
+  roundEl.innerHTML = st.endedAt !== null
+    ? "Session ended"
+    : st.round.held
     ? `Queue is full · votes keep rolling`
     : left > 0
       ? `Round ${st.round.index + 1} closes in <b>${fmtTime(left)}</b>`
@@ -143,6 +172,11 @@ function tick() {
       $("now-artist").textContent = s.artist;
     }
     $("now-bar").style.width = `${Math.min(100, (np.positionMs / (s.durationS * 1000)) * 100)}%`;
+    const skipBtn = $("skip");
+    const voted = np.entry.skippers.includes(session.id);
+    skipBtn.classList.toggle("on", voted);
+    skipBtn.setAttribute("aria-label", voted ? "You voted to skip" : "Vote to skip");
+    $("skip-count").textContent = `${np.entry.skippers.length}/${session.skipThreshold}`;
   }
 }
 
@@ -215,6 +249,21 @@ document.addEventListener("click", async (e) => {
     }
   } catch (err) {
     toast(`Could not send vote: ${(err as Error).message}`);
+  }
+});
+
+$("skip").addEventListener("click", async () => {
+  if (!session) return;
+  const entry = session.state().nowPlaying?.entry;
+  if (!entry) return;
+  if (entry.skippers.includes(session.id)) return toast("You already voted to skip this one");
+  try {
+    await session.skip();
+    const left = session.skipThreshold - entry.skippers.length - 1;
+    toast(left > 0 ? `Skip vote counted — ${left} more needed` : `Skipping “${entry.song.title}”`);
+    tick();
+  } catch (err) {
+    toast(`Could not send skip vote: ${(err as Error).message}`);
   }
 });
 

@@ -20,6 +20,7 @@
     "start": "NODE_ENV=production bun src/server.ts",
     "build:wasm": "./scripts/build-wasm.sh",
     "test": "bun test",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "hash-password": "bun scripts/hash-password.ts"
   }
 }

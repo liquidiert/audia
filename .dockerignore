@@ -1,6 +1,6 @@
 node_modules
 crates
-scripts
+scripts/build-wasm.sh
 .git
 .audia-session.json
 *.log

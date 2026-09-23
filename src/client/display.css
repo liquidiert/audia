@@ -6,11 +6,23 @@
   --accent: #ff4f7b;
   --accent-2: #7b5cff;
   --ok: #3ddc97;
-  --side-w: min(360px, 30vw);
+  --panel-w: min(360px, 30vw);
+  --side-w: var(--panel-w);
   color-scheme: dark;
 }
 
+/* Registered so layout that depends on the panel width can animate when it collapses. */
+@property --side-w {
+  syntax: "<length>";
+  inherits: true;
+  initial-value: 0px;
+}
+body { transition: --side-w 0.35s ease; }
+body.side-collapsed { --side-w: 0px; }
+
 * { box-sizing: border-box; }
+/* Components set `display`; keep the `hidden` attribute authoritative. */
+[hidden] { display: none !important; }
 html, body { height: 100%; margin: 0; overflow: hidden; }
 body {
   background:
@@ -28,11 +40,7 @@ body {
   position: fixed; top: 24px; left: 28px; right: calc(var(--side-w) + 28px);
   display: flex; align-items: center; gap: 22px; pointer-events: none;
 }
-.logo {
-  font-weight: 900; font-size: 34px; letter-spacing: -1px;
-  background: linear-gradient(90deg, var(--accent), var(--accent-2));
-  -webkit-background-clip: text; background-clip: text; color: transparent;
-}
+.logo { display: block; flex: none; filter: drop-shadow(0 2px 10px #ff4f7b40); }
 .session-name { color: var(--muted); font-size: 18px; }
 .round { display: flex; align-items: center; gap: 10px; margin-left: auto; }
 .ring { width: 44px; height: 44px; transform: rotate(-90deg); }
@@ -50,8 +58,18 @@ body {
 .status[data-status="connecting"]::before { background: #f5b942; }
 .status[data-status="offline"]::before { background: #e5484d; }
 
+.side-toggle {
+  pointer-events: auto; flex: none; width: 36px; height: 36px; border-radius: 50%; cursor: pointer;
+  display: grid; place-items: center; color: var(--muted);
+  background: #ffffff0d; border: 1px solid #ffffff1a; transition: background 0.2s, color 0.2s;
+}
+.side-toggle:hover { background: #ffffff1a; color: var(--text); }
+.side-toggle svg { transition: transform 0.35s ease; }
+body.side-collapsed .side-toggle svg { transform: rotate(180deg); }
+
 .side {
-  position: fixed; top: 0; right: 0; bottom: 0; width: var(--side-w);
+  position: fixed; top: 0; right: 0; bottom: 0; width: var(--panel-w);
+  transition: transform 0.35s ease;
   background: var(--panel); backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px);
   border-left: 1px solid #ffffff10;
   display: flex; flex-direction: column; padding: 22px; gap: 18px;
@@ -74,18 +92,79 @@ body {
 .played { opacity: 0.5; }
 .muted { color: var(--muted); font-size: 14px; margin: 0 0 10px; }
 
+.save-btn {
+  font: inherit; font-size: 14px; color: var(--text); cursor: pointer;
+  background: #ffffff10; border: 1px solid #ffffff1a; border-radius: 12px; padding: 10px;
+}
+.save-btn:hover { background: #ffffff18; }
+
+.save-dialog {
+  width: min(520px, 92vw); max-height: 86vh; padding: 0; border: 1px solid #ffffff1a; border-radius: 20px;
+  background: #16161f; color: var(--text); box-shadow: 0 30px 80px #000c;
+}
+.save-dialog::backdrop { background: #0009; backdrop-filter: blur(4px); }
+.save-dialog form { display: flex; flex-direction: column; gap: 12px; padding: 22px; max-height: 86vh; }
+.save-dialog h3 { margin: 0; font-size: 22px; }
+.save-dialog .muted { margin: 0; }
+.save-list {
+  margin: 0; padding: 0; list-style-position: inside; overflow: auto; max-height: 30vh; font-size: 14px; color: var(--muted);
+  border-top: 1px solid #ffffff10; border-bottom: 1px solid #ffffff10; padding-top: 8px; padding-bottom: 8px;
+}
+.save-list li { margin: 2px 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.save-list li b { color: var(--text); font-weight: 600; }
+#save-oauth { display: flex; flex-direction: column; gap: 10px; }
+.save-dialog label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
+.save-dialog input, .save-dialog select {
+  font: inherit; font-size: 15px; color: var(--text); background: #0d0d14; border: 1px solid #2a2a3c;
+  border-radius: 10px; padding: 9px 11px;
+}
+.save-progress { height: 6px; background: #ffffff14; border-radius: 6px; overflow: hidden; }
+.save-progress div { height: 100%; width: 0; background: linear-gradient(90deg, var(--accent), var(--accent-2)); transition: width 0.3s; }
+.save-status { margin: 0; font-size: 14px; }
+.save-status.error { color: #ff8a8a; }
+.save-status a, .save-actions a { color: var(--accent); }
+.save-actions { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
+.save-actions a { font-size: 13px; }
+.save-actions .spacer { flex: 1; }
+.save-actions button {
+  font: inherit; font-size: 14px; color: var(--text); cursor: pointer; border: 0; border-radius: 12px; padding: 10px 14px;
+  background: linear-gradient(90deg, var(--accent), var(--accent-2));
+}
+.save-actions button.ghost { background: #ffffff10; }
+.save-actions button:disabled { opacity: 0.5; cursor: default; }
+
 .controls { display: flex; gap: 8px; }
 .controls button {
   flex: 1; font: inherit; font-size: 14px; color: var(--text); cursor: pointer;
   background: linear-gradient(90deg, var(--accent), var(--accent-2)); border: 0; border-radius: 12px; padding: 10px;
 }
 .controls button.ghost { background: #ffffff10; flex: 0 0 auto; }
+.controls button.danger { color: #ff8a8a; }
+.controls button:disabled { opacity: 0.45; cursor: not-allowed; }
+body.side-collapsed .side { transform: translateX(100%); }
 .controls button.on { background: #ffffff18; }
 
 .empty {
   position: fixed; left: 0; right: var(--side-w); top: 45%; text-align: center; pointer-events: none;
 }
 .empty-title { font-size: 34px; font-weight: 800; margin-bottom: 6px; }
+
+.ended {
+  position: fixed; left: 0; right: var(--side-w); top: 50%; transform: translateY(-50%);
+  display: flex; flex-direction: column; align-items: center; gap: 10px; text-align: center;
+}
+.ended-title {
+  font-size: 56px; font-weight: 900; letter-spacing: -1.5px;
+  background: linear-gradient(90deg, var(--accent), var(--accent-2));
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+.ended .muted { font-size: 18px; }
+.ended-actions { display: flex; gap: 10px; margin-top: 14px; }
+.ended-actions button {
+  font: inherit; color: var(--text); cursor: pointer; border: 0; border-radius: 14px; padding: 12px 18px;
+  background: linear-gradient(90deg, var(--accent), var(--accent-2));
+}
+.ended-actions button.ghost { background: #ffffff12; }
 
 .yt-wrap {
   position: fixed; left: 28px; bottom: 130px; width: 200px; aspect-ratio: 16 / 9;
@@ -100,9 +179,9 @@ body {
   background: rgba(30, 30, 46, 0.85); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
   border: 1px solid #ffffff14; border-radius: 999px; padding: 10px 28px 10px 10px;
   box-shadow: 0 18px 50px #000a, 0 0 0 1px #ffffff05 inset;
-  transition: opacity 0.4s;
+  transition: opacity 0.4s, transform 0.4s;
 }
-.pill.idle { opacity: 0.7; }
+.pill.idle { opacity: 0; transform: translate(-50%, 40px); pointer-events: none; }
 .pill img {
   width: 64px; height: 64px; border-radius: 50%; object-fit: cover; background: #ffffff10; flex: none;
   animation: spin 14s linear infinite;
@@ -112,6 +191,11 @@ body {
 .pill-meta { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
 .pill-title { font-weight: 700; font-size: 19px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .pill-artist { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pill-skip {
+  margin-left: auto; flex: none; display: inline-flex; align-items: center; gap: 5px; font-size: 13px; font-variant-numeric: tabular-nums;
+  color: #fff; background: #7b5cff55; border: 1px solid #7b5cffaa; border-radius: 999px; padding: 2px 10px;
+}
+.list .tag { font-size: 11px; color: var(--muted); border: 1px solid #ffffff22; border-radius: 999px; padding: 1px 7px; }
 .seek { display: flex; align-items: center; gap: 12px; margin-top: 8px; }
 .time { font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; min-width: 38px; }
 .time:last-child { text-align: right; }
@@ -125,5 +209,6 @@ body {
 
 @media (max-width: 900px) {
   :root { --side-w: 0px; }
-  .side { display: none; }
+  body.side-collapsed { --side-w: 0px; }
+  .side, .side-toggle { display: none; }
 }

@@ -1,5 +1,5 @@
 import init, { AudiaNode, type Channel, verify } from "../wasm/audia_gossip.js";
-import { derive } from "../shared/state";
+import { DEFAULT_SKIP_VOTES, derive } from "../shared/state";
 import {
   chunkEvents,
   decodeTicket,
@@ -72,13 +72,23 @@ export class Session {
     return null;
   }
 
-  static async start(ticket: Ticket | null, onStatus?: (s: Session) => void): Promise<Session> {
+  /**
+   * Join (or with `host: true` and a fresh ticket, found) a session. The founding
+   * browser's endpoint id is written into the config as host; its key lives in
+   * localStorage, so only that browser can end the session later.
+   */
+  static async start(
+    ticket: Ticket | null,
+    onStatus?: (s: Session) => void,
+    opts: { host?: boolean } = {},
+  ): Promise<Session> {
     const [offset] = await Promise.all([clockOffset(), init({ module_or_path: WASM_URL })]);
     const stored = localStorage.getItem(KEY_STORAGE);
     const node = await AudiaNode.spawn(stored ? fromHex(stored) : undefined);
     localStorage.setItem(KEY_STORAGE, toHex(node.secretKey()));
 
     const cfg = ticket?.cfg ?? newSessionConfig({ epoch: Date.now() + offset });
+    if (opts.host && !cfg.host) cfg.host = node.endpointId();
     const s = new Session(cfg, ticket?.peers ?? [], node, offset);
     s.status = "connecting";
     onStatus?.(s);
@@ -123,6 +133,28 @@ export class Session {
 
   async vote(songId: string, on: boolean) {
     await this.emit({ k: "vote", songId, on });
+  }
+
+  /** Vote to skip whatever is playing right now. */
+  async skip() {
+    const entry = this.state().nowPlaying?.entry;
+    if (!entry || entry.skippers.includes(this.id)) return;
+    await this.emit({ k: "skip", songId: entry.song.id, round: entry.round });
+  }
+
+  /** Whether this browser founded the session and may end it. */
+  get isHost() {
+    return this.cfg.host === this.id;
+  }
+
+  /** End the session for everyone (host only). */
+  async end() {
+    if (!this.isHost) throw new Error("Only the display that started this session can end it");
+    await this.emit({ k: "end" });
+  }
+
+  get skipThreshold() {
+    return this.cfg.skipVotes ?? DEFAULT_SKIP_VOTES;
   }
 
   private async join() {

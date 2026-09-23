@@ -18,21 +18,79 @@ bun install
 bun run dev          # or: bun run start (production mode)
 ```
 
-1. Open `http://localhost:3000/display` on the big screen. This starts a session.
+1. Open `http://localhost:3000/display` on the big screen and log in (see
+   [Display password](#display-password)). This starts a session.
 2. Scan the QR code with phones. They open the voting page (`/`) on the host's LAN address.
 3. Search, tap **+** to propose a song and vote for it, and tap **♥** to vote or unvote.
+   Tap the skip button in the now-playing bar to vote to skip the current song.
 4. On the display, click **♪ Enable sound** to play the schedule through the YouTube player.
+5. When the party is over, click **End session** on the display. Voting stops, the music ends,
+   and phones show what was played. Then click **Save playlist to YouTube Music**. See
+   [Saving playlists](#saving-playlists-to-youtube-music) for the one-time setup.
+
+Press **P**, or click the arrow in the top-right corner, to hide or show the display's side panel.
+Only the browser that started a session can end it, because its iroh key signs the end event.
 
 Session parameters are query params on a new session:
-`/display?new&name=Party&round=90&votes=3&queue=3`
+`/display?new&name=Party&round=90&votes=3&queue=3&skip=5`
 
 | param   | default | meaning                                                             |
 | ------- | ------- | ------------------------------------------------------------------- |
 | `round` | 90      | Round length in seconds.                                            |
 | `votes` | 3       | Votes per person that count at once. A newer vote pushes out the oldest. |
 | `queue` | 3       | Rounds pause, and votes keep rolling, while this many songs are queued or playing. |
+| `skip`  | 5       | Skip votes from different people that end the current song early. |
 
-Env: `PORT` (default 3000), `AUDIA_SESSION_FILE` (default `.audia-session.json`).
+Env:
+
+| variable                | meaning                                                              |
+| ----------------------- | -------------------------------------------------------------------- |
+| `PORT`                  | Port to listen on (default 3000).                                    |
+| `DISPLAY_USER`          | Basic auth user for the display (default `audia`).                   |
+| `DISPLAY_PASSWORD_HASH` | Salted password hash for the display. Generate it with `bun run hash-password`. |
+| `GOOGLE_CLIENT_ID`      | Optional. Enables saving playlists to YouTube.                       |
+| `AUDIA_SESSION_FILE`    | Where the current session is kept (default `.audia-session.json`).   |
+
+## Display password
+
+`/display` and the endpoints only it uses (`/api/info`, and changing or ending the session) are
+protected with HTTP Basic auth. The phone pages stay open.
+
+The password is never stored in plain text. Generate a salted argon2id hash and put it in the environment:
+
+```sh
+bun run hash-password          # prompts for the password
+# DISPLAY_PASSWORD_HASH=JGFyZ29uMmlk…
+```
+
+The script prints the hash base64-encoded, because raw hashes contain `$`, which `.env` files
+and deploy dashboards tend to interpolate. Raw `$argon2id$…` values are accepted too. If the
+variable is missing, the server logs a warning and the display is open to everyone.
+
+After 10 failed logins in 10 minutes from one client (by `X-Forwarded-For`), the server
+answers 429 until the window has passed.
+
+## Saving playlists to YouTube Music
+
+The display saves every song that made the playlist, in play order and without skipped songs,
+as a new playlist in the signed-in Google account. It shows up in both YouTube and YouTube Music.
+Sign-in happens entirely in the browser (Google Identity Services), and the server only knows
+the public client ID.
+
+One-time setup in the [Google Cloud console](https://console.cloud.google.com/):
+
+1. Create a project and enable **YouTube Data API v3**.
+2. Configure the **OAuth consent screen**. While it's in *Testing*, add the Google accounts that
+   will save playlists as test users.
+3. Create an **OAuth client ID** of type *Web application*. Under **Authorized JavaScript origins**,
+   add the site's origin, e.g. `https://audia.example.com`, plus `http://localhost:3000` for development.
+4. Set `GOOGLE_CLIENT_ID` to the client ID (`….apps.googleusercontent.com`) and restart.
+
+Without `GOOGLE_CLIENT_ID`, the dialog offers a link that opens the songs as a temporary
+YouTube playlist, which can be saved there with **Save**. YouTube limits that link to 50 songs.
+
+The API's default quota is 10,000 units a day, and each song costs 50, so one day's quota
+saves about 190 songs.
 
 ## How it works
 
@@ -42,7 +100,7 @@ topic. Browsers can't use UDP, so traffic goes through iroh relays (n0's public 
 The crate also exposes ed25519 `sign` and `verify`, so every event is signed with the author's
 endpoint key and nobody can vote under someone else's id.
 
-**Replicated event log** (`src/client/session.ts`): peers exchange signed `propose` and `vote`
+**Replicated event log** (`src/client/session.ts`): peers exchange signed `propose`, `vote` and `skip`
 events. When a neighbour comes up, each side sends its full log in chunks, so late joiners and
 reloaded phones catch up. The log is also kept in `localStorage`. The Bun host keeps a
 directory of recently seen peers (`/api/session`), and a peer with no neighbours keeps
@@ -57,6 +115,8 @@ the same log, so there is no leader.
 - A person's latest vote per song wins, and only their `maxVotes` most recent votes count.
 - Songs play back to back: `startAt = max(closedAt, previous endAt)`. "Now playing" and the
   seekbar position are computed from this schedule on every device.
+- A skip vote counts only while its song is playing. When `skip` different people have voted,
+  the song ends at the moment of the last vote and the rest of the playlist moves up.
 
 **Search** (`src/server.ts`): YouTube Music has no official public API. The server proxies
 `/api/search` through [`ytmusic-api`](https://www.npmjs.com/package/ytmusic-api), the unofficial

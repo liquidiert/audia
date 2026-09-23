@@ -20,7 +20,11 @@ export function signingBytes(e: AppEvent): Uint8Array {
   const body =
     e.k === "propose"
       ? [e.k, e.id, e.by, e.ts, e.song.id, e.song.title, e.song.artist, e.song.album ?? "", e.song.durationS, e.song.thumb ?? ""]
-      : [e.k, e.id, e.by, e.ts, e.songId, e.on];
+      : e.k === "vote"
+        ? [e.k, e.id, e.by, e.ts, e.songId, e.on]
+        : e.k === "skip"
+          ? [e.k, e.id, e.by, e.ts, e.songId, e.round]
+          : [e.k, e.id, e.by, e.ts];
   return enc.encode(JSON.stringify(body));
 }
 
@@ -47,6 +51,8 @@ export function validEvent(e: unknown, now: number): e is AppEvent {
   if (x.ts > now + MAX_FUTURE_MS) return false;
   if (x.k === "propose") return validSong(x.song);
   if (x.k === "vote") return str(x.songId, 32) && typeof x.on === "boolean";
+  if (x.k === "skip") return str(x.songId, 32) && Number.isInteger(x.round) && x.round >= 0;
+  if (x.k === "end") return true;
   return false;
 }
 
@@ -96,7 +102,12 @@ export function decodeTicket(s: string): Ticket | null {
   try {
     const b64 = s.replace(/-/g, "+").replace(/_/g, "/");
     const t = JSON.parse(dec.decode(Uint8Array.from(atob(b64), (c) => c.charCodeAt(0))));
-    if (t?.cfg?.v === 1 && typeof t.cfg.topic === "string" && Array.isArray(t.peers)) return t;
+    if (
+      t?.cfg?.v === 1 &&
+      typeof t.cfg.topic === "string" &&
+      (t.cfg.host === undefined || typeof t.cfg.host === "string") &&
+      Array.isArray(t.peers)
+    ) return t;
   } catch {}
   return null;
 }
@@ -111,6 +122,7 @@ export function newSessionConfig(opts: Partial<SessionConfig> = {}): SessionConf
     graceMs: 3_000,
     maxVotes: 3,
     maxQueue: 3,
+    skipVotes: 5,
     ...opts,
   };
 }

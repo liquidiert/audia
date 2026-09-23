@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!-- audia: two beamed notes whose heads are people, the beam is the link between peers. -->
+  <defs>
+    <linearGradient id="g" gradientUnits="userSpaceOnUse" x1="2" y1="3" x2="30" y2="30">
+      <stop offset="0" stop-color="#ff4f7b" />
+      <stop offset="1" stop-color="#7b5cff" />
+    </linearGradient>
+  </defs>
+  <g fill="url(#g)">
+    <path d="M10.2 7.6 28.8 3.2v4.6L10.2 12.2z" />
+    <rect x="10.2" y="9" width="2.6" height="10.4" />
+    <rect x="26.2" y="5" width="2.6" height="10.4" />
+    <circle cx="8.6" cy="19.4" r="4.2" />
+    <path d="M1.6 30.6c0-4.4 3.2-6 7-6s7 1.6 7 6z" />
+    <circle cx="24.6" cy="15.4" r="4.2" />
+    <path d="M17.6 26.6c0-4.4 3.2-6 7-6s7 1.6 7 6z" />
+  </g>
+</svg>

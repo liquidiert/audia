@@ -4,13 +4,31 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>audia · display</title>
+    <link rel="icon" type="image/svg+xml" href="./icon.svg" />
     <link rel="stylesheet" href="./display.css" />
   </head>
   <body>
     <div id="stage" class="stage"></div>
 
     <header class="hud">
-      <div class="logo">audia</div>
+      <svg class="logo" viewBox="0 0 32 32" width="46" height="46" role="img" aria-label="audia">
+        <title>audia</title>
+        <defs>
+          <linearGradient id="audia-logo-g" gradientUnits="userSpaceOnUse" x1="2" y1="3" x2="30" y2="30">
+            <stop offset="0" stop-color="#ff4f7b" />
+            <stop offset="1" stop-color="#7b5cff" />
+          </linearGradient>
+        </defs>
+        <g fill="url(#audia-logo-g)">
+          <path d="M10.2 7.6 28.8 3.2v4.6L10.2 12.2z" />
+          <rect x="10.2" y="9" width="2.6" height="10.4" />
+          <rect x="26.2" y="5" width="2.6" height="10.4" />
+          <circle cx="8.6" cy="19.4" r="4.2" />
+          <path d="M1.6 30.6c0-4.4 3.2-6 7-6s7 1.6 7 6z" />
+          <circle cx="24.6" cy="15.4" r="4.2" />
+          <path d="M17.6 26.6c0-4.4 3.2-6 7-6s7 1.6 7 6z" />
+        </g>
+      </svg>
       <div id="session-name" class="session-name"></div>
       <div class="round">
         <svg class="ring" viewBox="0 0 36 36" aria-hidden="true">
@@ -23,6 +41,11 @@
         </div>
       </div>
       <div id="status" class="status" data-status="starting">starting…</div>
+      <button id="side-toggle" class="side-toggle" type="button" aria-label="Hide panel" title="Hide panel (P)">
+        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+          <path fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" d="M9 6l6 6-6 6" />
+        </svg>
+      </button>
     </header>
 
     <aside class="side">
@@ -40,11 +63,54 @@
         <h2>Played</h2>
         <ol id="played" class="list played"></ol>
       </section>
+      <button id="save" type="button" class="save-btn">Save playlist to YouTube Music</button>
       <div class="controls">
         <button id="sound" type="button">♪ Enable sound</button>
-        <button id="new-session" type="button" class="ghost">New session</button>
+        <button id="end-session" type="button" class="ghost danger">End session</button>
+        <button id="new-session" type="button" class="ghost">New</button>
       </div>
     </aside>
+
+    <dialog id="save-dialog" class="save-dialog">
+      <form method="dialog" id="save-form">
+        <h3>Save playlist</h3>
+        <p id="save-summary" class="muted"></p>
+        <ol id="save-list" class="save-list"></ol>
+
+        <div id="save-oauth">
+          <label>Name <input id="save-title" maxlength="150" required /></label>
+          <label>Visibility
+            <select id="save-privacy">
+              <option value="private">Private</option>
+              <option value="unlisted">Unlisted: anyone with the link</option>
+              <option value="public">Public</option>
+            </select>
+          </label>
+          <div id="save-progress" class="save-progress" hidden><div id="save-bar"></div></div>
+          <p id="save-status" class="save-status" hidden></p>
+        </div>
+        <p id="save-no-oauth" class="muted" hidden>
+          Direct saving isn't set up on this server (no <code>GOOGLE_CLIENT_ID</code>). Use the link below and
+          press <b>Save</b> on YouTube.
+        </p>
+
+        <div class="save-actions">
+          <a id="save-fallback" target="_blank" rel="noopener">Open as a YouTube playlist</a>
+          <span class="spacer"></span>
+          <button value="cancel" class="ghost" id="save-close">Close</button>
+          <button id="save-go" type="button">Sign in with Google and save</button>
+        </div>
+      </form>
+    </dialog>
+
+    <div id="ended" class="ended" hidden>
+      <div class="ended-title">That's a wrap!</div>
+      <div id="ended-summary" class="muted"></div>
+      <div class="ended-actions">
+        <button id="ended-save" type="button">Save playlist to YouTube Music</button>
+        <button id="ended-new" type="button" class="ghost">Start a new session</button>
+      </div>
+    </div>
 
     <div id="empty" class="empty" hidden>
       <div class="empty-title">No songs yet</div>
@@ -57,8 +123,9 @@
       <img id="pill-thumb" alt="" />
       <div class="pill-body">
         <div class="pill-meta">
-          <span id="pill-title" class="pill-title">Nothing playing</span>
-          <span id="pill-artist" class="pill-artist">Waiting for the first round to close</span>
+          <span id="pill-title" class="pill-title"></span>
+          <span id="pill-artist" class="pill-artist"></span>
+          <span id="pill-skip" class="pill-skip" hidden><svg class="skip-icon" viewBox="0 0 24 24" width="12" height="12" aria-hidden="true"><path fill="currentColor" d="M5 5.5v13l9-6.5-9-6.5zm10 0v13h2.5v-13H15z"/></svg><span id="pill-skip-count"></span></span>
         </div>
         <div class="seek">
           <span id="pill-pos" class="time">0:00</span>

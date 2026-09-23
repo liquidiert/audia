@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { derive, votesOf } from "./state";
+import { derive, keepers, votesOf } from "./state";
 import { chunkEvents, decodeTicket, decodeWire, encodeTicket, newSessionConfig, validEvent } from "./protocol";
 import type { AppEvent, Song } from "./types";
 
@@ -11,6 +11,9 @@ const propose = (id: string, ts: number, by = "p", durationS = 10): AppEvent => 
 });
 const vote = (songId: string, by: string, ts: number, on = true): AppEvent => ({
   k: "vote", id: `e${n++}`, by, ts, sig: "", songId, on,
+});
+const skip = (songId: string, round: number, by: string, ts: number): AppEvent => ({
+  k: "skip", id: `e${n++}`, by, ts, sig: "", songId, round,
 });
 
 describe("derive", () => {
@@ -84,6 +87,101 @@ describe("derive", () => {
   });
 });
 
+describe("skip votes", () => {
+  const c = { ...cfg, skipVotes: 3 };
+  // x wins round 0 (plays 1000..11000), y wins round 1 and queues behind it.
+  const base = [propose("x", 10), vote("x", "u", 20), propose("y", 1010), vote("y", "u", 1020)];
+
+  test("below the threshold nothing changes, but skippers are tracked", () => {
+    const s = derive([...base, skip("x", 0, "a", 2000), skip("x", 0, "b", 2100)], c, 3000);
+    expect(s.nowPlaying?.entry.song.id).toBe("x");
+    expect(s.nowPlaying?.entry.skippers).toEqual(["a", "b"]);
+    expect(s.playlist[0]!.endAt).toBe(11_000);
+  });
+
+  test("reaching the threshold ends the song and moves the queue up", () => {
+    const s = derive([...base, skip("x", 0, "a", 2000), skip("x", 0, "b", 2100), skip("x", 0, "c", 2500)], c, 3000);
+    expect(s.playlist[0]).toMatchObject({ skipped: true, endAt: 2500 });
+    expect(s.playlist[1]).toMatchObject({ song: { id: "y" }, startAt: 2500, endAt: 12_500 });
+    expect(s.nowPlaying?.entry.song.id).toBe("y");
+    expect(s.nowPlaying?.positionMs).toBe(500);
+  });
+
+  test("duplicate voters count once; votes outside the playing window are ignored", () => {
+    const s = derive(
+      [
+        ...base,
+        skip("y", 1, "a", 2000), // y is queued, not playing yet
+        skip("x", 0, "a", 2000),
+        skip("x", 0, "a", 2100),
+        skip("x", 0, "b", 2200),
+        skip("x", 5, "c", 2300), // wrong round
+      ],
+      c,
+      3000,
+    );
+    expect(s.playlist[0]!.skippers).toEqual(["a", "b"]);
+    expect(s.playlist[0]!.skipped).toBe(false);
+    expect(s.playlist[1]!.skippers).toEqual([]);
+  });
+
+  test("a skip frees the queue so a held round can close earlier", () => {
+    const held = { ...c, maxQueue: 1 };
+    const ev = [...base, skip("x", 0, "a", 1500), skip("x", 0, "b", 1600), skip("x", 0, "c", 1700)];
+    // Without skips, y would wait until x ends at 11000; now it closes at the 2000 boundary.
+    const s = derive(ev, held, 2200);
+    expect(s.playlist.map((p) => [p.song.id, p.closedAt, p.startAt])).toEqual([["x", 1000, 1000], ["y", 2000, 2000]]);
+  });
+
+  test("defaults to 5 skip votes for sessions created before skips existed", () => {
+    const { skipVotes, ...old } = c;
+    const four = ["a", "b", "c", "d"].map((by, i) => skip("x", 0, by, 2000 + i));
+    expect(derive([...base, ...four], old, 3000).playlist[0]!.skipped).toBe(false);
+    expect(derive([...base, ...four, skip("x", 0, "e", 2100)], old, 3000).playlist[0]!.skipped).toBe(true);
+  });
+});
+
+describe("ending the session", () => {
+  const c = { ...cfg, host: "host" };
+  const end = (by: string, ts: number): AppEvent => ({ k: "end", id: `e${n++}`, by, ts, sig: "" });
+  // x plays 1000..11000, y is queued behind it.
+  const base = [propose("x", 10), vote("x", "u", 20), propose("y", 1010), vote("y", "u", 1020)];
+
+  test("the host's end stops the music, drops unplayed songs and freezes everything", () => {
+    const ev = [...base, end("host", 3000), propose("z", 3100), vote("z", "u", 3200), skip("x", 0, "u", 3300)];
+    const s = derive(ev, c, 60_000);
+    expect(s.endedAt).toBe(3000);
+    expect(s.nowPlaying).toBeNull();
+    expect(s.playlist.map((p) => [p.song.id, p.endAt])).toEqual([["x", 3000]]);
+    expect(s.candidates.map((c) => c.song.id)).not.toContain("z");
+  });
+
+  test("before the end time nothing changes", () => {
+    const s = derive([...base, end("host", 3000)], c, 2500);
+    expect(s.endedAt).toBeNull();
+    expect(s.nowPlaying?.entry.song.id).toBe("x");
+  });
+
+  test("anyone else's end event is ignored, as are ends in sessions without a host", () => {
+    expect(derive([...base, end("guest", 3000)], c, 60_000).endedAt).toBeNull();
+    expect(derive([...base, end("host", 3000)], cfg, 60_000).endedAt).toBeNull();
+  });
+
+  test("the earliest end wins", () => {
+    expect(derive([...base, end("host", 5000), end("host", 3000)], c, 60_000).endedAt).toBe(3000);
+  });
+});
+
+describe("keepers", () => {
+  test("keeps play order, drops skipped songs and repeats", () => {
+    const entry = (id: string, round: number, skipped = false) => ({
+      song: song(id), round, votes: 1, closedAt: 0, startAt: 0, endAt: 0, skippers: [], skipped,
+    });
+    const list = [entry("a", 0), entry("b", 1, true), entry("c", 2), entry("a", 3), entry("b", 4)];
+    expect(keepers(list).map((s) => s.id)).toEqual(["a", "c", "b"]);
+  });
+});
+
 describe("protocol", () => {
   test("ticket roundtrip", () => {
     const t = { cfg, peers: [{ id: "abc", relay: "https://relay.example/" }] };
@@ -104,5 +202,8 @@ describe("protocol", () => {
     expect(validEvent({ ...propose("x", 0), sig: "00", ts: 10 ** 9 }, 0)).toBe(false);
     expect(validEvent({ k: "vote", id: "1", by: "u", ts: 0, sig: "", songId: 5, on: true }, 0)).toBe(false);
     expect(validEvent(null, 0)).toBe(false);
+    expect(validEvent({ ...skip("x", 2, "u", 0), sig: "00" }, 0)).toBe(true);
+    expect(validEvent({ ...skip("x", 2, "u", 0), sig: "00", round: 1.5 }, 0)).toBe(false);
+    expect(validEvent({ k: "end", id: "1", by: "h", ts: 0, sig: "00" }, 0)).toBe(true);
   });
 });

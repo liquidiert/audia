@@ -24,6 +24,10 @@ export interface SessionConfig {
   maxVotes: number;
   /** A round only closes if fewer than this many songs are queued (not yet finished). */
   maxQueue: number;
+  /** Distinct skip votes that end the playing song early. Optional for older tickets. */
+  skipVotes?: number;
+  /** Endpoint id of the display that started the session; only it can end the session. */
+  host?: string;
 }
 
 interface EventBase {
@@ -48,7 +52,19 @@ export interface VoteEvent extends EventBase {
   on: boolean;
 }
 
-export type AppEvent = ProposeEvent | VoteEvent;
+/** Vote to skip a playlist entry (identified by round + song). Only counts while it plays. */
+export interface SkipEvent extends EventBase {
+  k: "skip";
+  songId: string;
+  round: number;
+}
+
+/** The host ends the session: nothing after `ts` counts, the music stops. */
+export interface EndEvent extends EventBase {
+  k: "end";
+}
+
+export type AppEvent = ProposeEvent | VoteEvent | SkipEvent | EndEvent;
 
 /** Messages on the gossip wire (JSON, utf-8). */
 export type WireMessage =
@@ -72,6 +88,10 @@ export interface PlaylistEntry {
   closedAt: number;
   startAt: number;
   endAt: number;
+  /** Voters who asked to skip this entry while it was playing. */
+  skippers: string[];
+  /** Ended early because enough skip votes came in. */
+  skipped: boolean;
 }
 
 export interface DerivedState {
@@ -80,4 +100,6 @@ export interface DerivedState {
   candidates: Candidate[];
   playlist: PlaylistEntry[];
   nowPlaying: { entry: PlaylistEntry; positionMs: number } | null;
+  /** When the host ended the session, if it has. */
+  endedAt: number | null;
 }
