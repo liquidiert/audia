@@ -64,8 +64,20 @@ async function renderQr() {
     const { lan } = await info;
     if (lan?.[0]) base = lan[0];
   }
-  const url = `${base}/#${session.ticket()}`;
-  $("qr").innerHTML = renderSVG(url, { ecc: "L", border: 0 });
+  // The QR code carries the session's join token; phones without it can't open the voting page.
+  let path: string | undefined;
+  try {
+    const res = await fetch("/api/session/join");
+    if (res.ok) path = (await res.json()).path;
+  } catch {}
+  if (!path) {
+    $("qr").innerHTML = "";
+    $("qr-url").textContent = "No active session";
+    return;
+  }
+  const url = `${base}${path}`;
+  // Short URL: medium error correction still gives big, easy-to-scan modules.
+  $("qr").innerHTML = renderSVG(url, { ecc: "M", border: 0 });
   $("qr-url").textContent = base.replace(/^https?:\/\//, "");
   $("qr").onclick = () => window.open(url, "_blank");
 }
@@ -96,7 +108,7 @@ function renderState() {
   $("ended").hidden = !ended;
   $<HTMLButtonElement>("end-session").hidden = ended;
   if (ended) {
-    const n = keepers(st.playlist).length;
+    const n = keepers(st.playlist, now).length;
     $("ended-summary").textContent = n
       ? `${n} song${n === 1 ? "" : "s"} played tonight. Thanks for voting!`
       : "No songs made it to the playlist this time.";
@@ -111,12 +123,20 @@ function renderState() {
   $("empty").hidden = ended || st.candidates.length > 0;
 
   const upcoming = st.playlist.filter((p) => p.startAt > now);
+  $("next-empty").textContent = st.base
+    ? `The winner of this round plays next. No votes? Something from “${st.base.name}” plays.`
+    : "The winner of this round plays next.";
   const history = st.playlist.filter((p) => p.endAt <= now).reverse().slice(0, 8);
-  const sig = JSON.stringify([upcoming.map((p) => p.startAt), history.map((p) => p.endAt)]);
+  const sig = JSON.stringify([upcoming.map((p) => p.startAt), history.map((p) => p.endAt), st.base?.name]);
   if (sig !== lastQueueSig) {
     lastQueueSig = sig;
-    $("next").innerHTML = upcoming.map((p) => row(p, `<span class="when" data-start="${p.startAt}"></span>`)).join("");
-    $("played").innerHTML = history.map((p) => row(p, p.skipped ? `<span class="tag">skipped</span>` : "")).join("");
+    const auto = (p: PlaylistEntry) => (p.source === "base" ? `<span class="tag" title="From the base playlist">auto</span>` : "");
+    $("next").innerHTML = upcoming
+      .map((p) => row(p, `${auto(p)}<span class="when" data-start="${p.startAt}"></span>`))
+      .join("");
+    $("played").innerHTML = history
+      .map((p) => row(p, p.skipped ? `<span class="tag">skipped</span>` : auto(p)))
+      .join("");
     $("next-empty").hidden = upcoming.length > 0;
   }
 }
@@ -205,12 +225,12 @@ function saveStatus(html: string, error = false) {
 }
 
 $("save").addEventListener("click", async () => {
-  toSave = keepers(session.state().playlist);
+  toSave = keepers(session.state().playlist, session.now());
   const { googleClientId } = await info;
   const date = new Date().toLocaleDateString(undefined, { day: "numeric", month: "long", year: "numeric" });
 
   $("save-summary").textContent = toSave.length
-    ? `${toSave.length} song${toSave.length === 1 ? "" : "s"} from tonight, in play order (skipped songs left out).`
+    ? `${toSave.length} song${toSave.length === 1 ? "" : "s"} that played tonight, in order (skipped songs left out).`
     : "Nothing has made the playlist yet.";
   $("save-list").innerHTML = toSave
     .map((s) => `<li><b>${escapeHtml(s.title)}</b> · ${escapeHtml(s.artist)}</li>`)
@@ -278,6 +298,93 @@ saveGo.addEventListener("click", async () => {
 saveDialog.addEventListener("close", () => delete saveGo.dataset.done);
 $("ended-save").addEventListener("click", () => $("save").click());
 
+// --- base playlist ---
+
+const baseDialog = $<HTMLDialogElement>("base-dialog");
+const baseGo = $<HTMLButtonElement>("base-go");
+let loadedBase: { name: string; songs: Song[] } | null = null;
+
+function baseStatus(text: string, error = false) {
+  const el = $("base-status");
+  el.hidden = false;
+  el.classList.toggle("error", error);
+  el.textContent = text;
+}
+
+function renderBaseDialog() {
+  const current = session.state().base;
+  $("base-current").innerHTML = current
+    ? `Now: <b>${escapeHtml(current.name)}</b> · ${current.songs} songs`
+    : "No base playlist yet. Silence when nobody votes.";
+  $<HTMLButtonElement>("base-remove").hidden = !current;
+  baseGo.textContent = loadedBase ? "Use as base playlist" : "Load";
+}
+
+$("base").addEventListener("click", () => {
+  loadedBase = null;
+  $<HTMLInputElement>("base-url").value = "";
+  for (const id of ["base-preview", "base-list", "base-status"]) $(id).hidden = true;
+  renderBaseDialog();
+  baseDialog.showModal();
+});
+
+$("base-url").addEventListener("input", () => {
+  // A new link invalidates the preview.
+  loadedBase = null;
+  $("base-preview").hidden = $("base-list").hidden = true;
+  renderBaseDialog();
+});
+$("base-url").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") {
+    e.preventDefault();
+    baseGo.click();
+  }
+});
+
+baseGo.addEventListener("click", async () => {
+  baseGo.disabled = true;
+  try {
+    if (!loadedBase) {
+      const link = $<HTMLInputElement>("base-url").value.trim();
+      if (!link) return baseStatus("Paste a playlist link first.", true);
+      baseStatus("Reading playlist…");
+      const res = await fetch(`/api/playlist?list=${encodeURIComponent(link)}`);
+      const data = await res.json();
+      if (!res.ok) return baseStatus(data.error ?? "Couldn't read that playlist.", true);
+      loadedBase = data as { name: string; songs: Song[] };
+      $("base-preview").hidden = false;
+      $("base-preview").innerHTML = `<b>${escapeHtml(loadedBase.name)}</b> · ${loadedBase.songs.length} songs`;
+      const shown = loadedBase.songs.slice(0, 8);
+      const more = loadedBase.songs.length - shown.length;
+      $("base-list").hidden = false;
+      $("base-list").innerHTML =
+        shown.map((s) => `<li><b>${escapeHtml(s.title)}</b> · ${escapeHtml(s.artist)}</li>`).join("") +
+        (more > 0 ? `<li>…and ${more} more</li>` : "");
+      $("base-status").hidden = true;
+    } else {
+      baseStatus("Sharing with everyone…");
+      await session.setBase(loadedBase.songs, loadedBase.name);
+      baseStatus(`Done. Songs from “${loadedBase.name}” play whenever nobody votes.`);
+      loadedBase = null;
+    }
+    renderBaseDialog();
+  } catch (e) {
+    baseStatus((e as Error).message, true);
+  } finally {
+    baseGo.disabled = false;
+  }
+});
+
+$("base-remove").addEventListener("click", async () => {
+  try {
+    await session.setBase([], "");
+    baseStatus("Base playlist removed.");
+    renderBaseDialog();
+  } catch (e) {
+    baseStatus((e as Error).message, true);
+  }
+});
+
 // --- ending the session ---
 
 $("end-session").addEventListener("click", async () => {
@@ -286,6 +393,7 @@ $("end-session").addEventListener("click", async () => {
     await session.end();
     // Stop handing the session out to new visitors.
     await fetch("/api/session", { method: "DELETE" }).catch(() => {});
+    renderQr();
     renderState();
     tick();
   } catch (e) {
@@ -332,9 +440,11 @@ session = await Session.start(
   { host: fresh },
 );
 if (!session.isHost) {
-  const end = $<HTMLButtonElement>("end-session");
-  end.disabled = true;
-  end.title = "Only the display (browser) that started this session can end it";
+  for (const id of ["end-session", "base"]) {
+    const btn = $<HTMLButtonElement>(id);
+    btn.disabled = true;
+    btn.title = "Only the display (browser) that started this session can do this";
+  }
 }
 $("session-name").textContent = session.cfg.name;
 if (fresh) {

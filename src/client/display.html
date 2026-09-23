@@ -66,13 +66,39 @@
         <h2>Played</h2>
         <ol id="played" class="list played"></ol>
       </section>
-      <button id="save" type="button" class="save-btn">Save playlist to YouTube Music</button>
+      <div class="panel-actions">
+        <button id="base" type="button" class="save-btn">Base playlist</button>
+        <button id="save" type="button" class="save-btn">Save to YouTube Music</button>
+      </div>
       <div class="controls">
         <button id="sound" type="button">♪ Enable sound</button>
         <button id="end-session" type="button" class="ghost danger">End session</button>
         <button id="new-session" type="button" class="ghost">New</button>
       </div>
     </aside>
+
+    <dialog id="base-dialog" class="save-dialog">
+      <form method="dialog" id="base-form">
+        <h3>Base playlist</h3>
+        <p class="muted">
+          When nobody has voted, random songs from this playlist keep the music going. Voted songs always
+          win. Only songs that actually play end up in the saved playlist.
+        </p>
+        <p id="base-current" class="base-current"></p>
+        <label>YouTube Music playlist link
+          <input id="base-url" placeholder="https://music.youtube.com/playlist?list=…" autocomplete="off" />
+        </label>
+        <p id="base-preview" class="muted" hidden></p>
+        <ol id="base-list" class="save-list" hidden></ol>
+        <p id="base-status" class="save-status" hidden></p>
+        <div class="save-actions">
+          <button id="base-remove" type="button" class="ghost danger-text">Remove</button>
+          <span class="spacer"></span>
+          <button value="cancel" class="ghost">Close</button>
+          <button id="base-go" type="button">Load</button>
+        </div>
+      </form>
+    </dialog>
 
     <dialog id="save-dialog" class="save-dialog">
       <form method="dialog" id="save-form">

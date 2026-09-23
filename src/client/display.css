@@ -98,11 +98,17 @@ body.side-collapsed .side-toggle svg { transform: rotate(180deg); }
 .played { opacity: 0.5; }
 .muted { color: var(--muted); font-size: 14px; margin: 0 0 10px; }
 
+.panel-actions { display: flex; gap: 8px; }
+.panel-actions .save-btn { flex: 1; }
+.base-current { margin: 0; font-size: 14px; padding: 10px 12px; border-radius: 12px; background: #ffffff08; }
+.base-current b { color: var(--text); }
+.save-actions button.danger-text { color: #ff8a8a; }
 .save-btn {
   font: inherit; font-size: 14px; color: var(--text); cursor: pointer;
   background: #ffffff10; border: 1px solid #ffffff1a; border-radius: 12px; padding: 10px;
 }
 .save-btn:hover { background: #ffffff18; }
+.save-btn:disabled { opacity: 0.45; cursor: not-allowed; }
 
 .save-dialog {
   width: min(520px, 92vw); max-height: 86vh; padding: 0; border: 1px solid #ffffff1a; border-radius: 20px;

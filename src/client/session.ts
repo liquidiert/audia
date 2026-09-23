@@ -1,6 +1,8 @@
 import init, { AudiaNode, type Channel, verify } from "../wasm/audia_gossip.js";
 import { DEFAULT_SKIP_VOTES, derive } from "../shared/state";
 import {
+  BASE_PART_SIZE,
+  MAX_BASE_PARTS,
   chunkEvents,
   decodeTicket,
   decodeWire,
@@ -151,6 +153,21 @@ export class Session {
   async end() {
     if (!this.isHost) throw new Error("Only the display that started this session can end it");
     await this.emit({ k: "end" });
+  }
+
+  /**
+   * Set (or with no songs, remove) the base playlist that fills silence when nobody
+   * votes. Host only; sent in parts because a whole list won't fit in one gossip frame.
+   */
+  async setBase(songs: Song[], name: string) {
+    if (!this.isHost) throw new Error("Only the display that started this session can change the base playlist");
+    const set = randomId();
+    const total = Math.max(1, Math.ceil(songs.length / BASE_PART_SIZE));
+    if (total > MAX_BASE_PARTS) throw new Error(`Base playlists can have at most ${BASE_PART_SIZE * MAX_BASE_PARTS} songs`);
+    for (let part = 0; part < total; part++) {
+      const chunk = songs.slice(part * BASE_PART_SIZE, (part + 1) * BASE_PART_SIZE);
+      await this.emit({ k: "base", set, part, total, name: name.slice(0, 200), songs: chunk });
+    }
   }
 
   get skipThreshold() {

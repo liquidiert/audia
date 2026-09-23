@@ -172,13 +172,85 @@ describe("ending the session", () => {
   });
 });
 
+describe("base playlist", () => {
+  const c = { ...cfg, host: "host", maxQueue: 3 };
+  let set = 0;
+  const baseSet = (ts: number, ids: string[], by = "host", partSize = 2): AppEvent[] => {
+    const id = `set${set++}`;
+    const parts = Math.max(1, Math.ceil(ids.length / partSize));
+    return Array.from({ length: parts }, (_, part) => ({
+      k: "base" as const, id: `e${n++}`, by, ts, sig: "", set: id, part, total: parts, name: "Wedding classics",
+      songs: ids.slice(part * partSize, (part + 1) * partSize).map((x) => song(x, 5)),
+    }));
+  };
+  const ids = ["b1", "b2", "b3", "b4", "b5"];
+
+  test("fills silence with base songs, back to back, without repeats", () => {
+    // Songs are 5s, rounds 1s: a base song is queued whenever the queue would run dry.
+    const s = derive(baseSet(0, ids), c, 30_500);
+    expect(s.base).toEqual({ name: "Wedding classics", songs: 5 });
+    expect(s.playlist.every((p) => p.source === "base" && p.votes === 0)).toBe(true);
+    for (let j = 1; j < s.playlist.length; j++) expect(s.playlist[j]!.startAt).toBe(s.playlist[j - 1]!.endAt);
+    const firstFive = s.playlist.slice(0, 5).map((p) => p.song.id);
+    expect(new Set(firstFive).size).toBe(5);
+    expect(s.nowPlaying?.entry.source).toBe("base");
+  });
+
+  test("the pick is the same on every peer (seeded by session and round)", () => {
+    const ev = baseSet(0, ids);
+    const a = derive(ev, c, 20_500).playlist.map((p) => p.song.id);
+    const b = derive([...ev].reverse(), { ...c }, 20_500).playlist.map((p) => p.song.id);
+    expect(a).toEqual(b);
+    const other = derive(ev, { ...c, topic: "another session" }, 20_500).playlist.map((p) => p.song.id);
+    expect(other).not.toEqual(a);
+  });
+
+  test("a voted song wins over the base playlist", () => {
+    const ev = [...baseSet(0, ids), propose("x", 10), vote("x", "u", 20)];
+    const s = derive(ev, c, 1200);
+    expect(s.playlist.map((p) => [p.song.id, p.source])).toEqual([["x", "vote"]]);
+  });
+
+  test("with votes queued there's no base filler until the queue runs dry", () => {
+    // x plays 1000..11000 (10s song); base only resumes for the round that closes before 11000 would leave silence.
+    const ev = [...baseSet(0, ids), propose("x", 10), vote("x", "u", 20)];
+    const s = derive(ev, c, 12_500);
+    expect(s.playlist[0]!.song.id).toBe("x");
+    expect(s.playlist[1]).toMatchObject({ source: "base", startAt: 11_000 });
+    expect(s.playlist.filter((p) => p.source === "base").length).toBeLessThanOrEqual(2);
+  });
+
+  test("incomplete sets, guests and removal", () => {
+    const partial = baseSet(0, ids).slice(0, 1);
+    expect(derive(partial, c, 5000).base).toBeNull();
+    expect(derive(baseSet(0, ids, "guest"), c, 5000).playlist).toEqual([]);
+    const removed = derive([...baseSet(0, ids), ...baseSet(2500, [])], c, 20_000);
+    expect(removed.base).toBeNull();
+    expect(removed.playlist.every((p) => p.closedAt <= 3000)).toBe(true);
+  });
+
+  test("keepers after the party include played base songs but not unplayed ones", () => {
+    const s = derive(baseSet(0, ids), c, 12_500);
+    const played = keepers(s.playlist, 12_500).map((x) => x.id);
+    expect(played.length).toBeGreaterThan(0);
+    expect(played.length).toBeLessThan(s.playlist.length + 1);
+    expect(s.playlist.filter((p) => p.startAt <= 12_500).map((p) => p.song.id)).toEqual(played);
+  });
+});
+
 describe("keepers", () => {
+  const entry = (id: string, round: number, skipped = false) => ({
+    song: song(id), round, votes: 1, closedAt: 0, startAt: round * 10, endAt: 0, skippers: [], skipped, source: "vote" as const,
+  });
+
   test("keeps play order, drops skipped songs and repeats", () => {
-    const entry = (id: string, round: number, skipped = false) => ({
-      song: song(id), round, votes: 1, closedAt: 0, startAt: 0, endAt: 0, skippers: [], skipped,
-    });
     const list = [entry("a", 0), entry("b", 1, true), entry("c", 2), entry("a", 3), entry("b", 4)];
     expect(keepers(list).map((s) => s.id)).toEqual(["a", "c", "b"]);
+  });
+
+  test("only songs that actually started playing", () => {
+    const list = [entry("a", 0), entry("c", 2), entry("d", 3)]; // start at 0, 20, 30
+    expect(keepers(list, 25).map((s) => s.id)).toEqual(["a", "c"]);
   });
 });
 
@@ -205,5 +277,9 @@ describe("protocol", () => {
     expect(validEvent({ ...skip("x", 2, "u", 0), sig: "00" }, 0)).toBe(true);
     expect(validEvent({ ...skip("x", 2, "u", 0), sig: "00", round: 1.5 }, 0)).toBe(false);
     expect(validEvent({ k: "end", id: "1", by: "h", ts: 0, sig: "00" }, 0)).toBe(true);
+    const base = { k: "base", id: "1", by: "h", ts: 0, sig: "00", set: "s", part: 0, total: 1, name: "n", songs: [song("a")] };
+    expect(validEvent(base, 0)).toBe(true);
+    expect(validEvent({ ...base, part: 1 }, 0)).toBe(false);
+    expect(validEvent({ ...base, songs: Array.from({ length: 41 }, (_, i) => song(`s${i}`)) }, 0)).toBe(false);
   });
 });

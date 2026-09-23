@@ -33,6 +33,11 @@ export const DEFAULT_SKIP_VOTES = 5;
  * - An `end` event from the session's host (and only the host) ends the session:
  *   later events are ignored, no more rounds close, the playing song stops and
  *   songs that hadn't started are dropped.
+ * - Base playlist (host only): when a round closes without any voted song and
+ *   the queue would run dry before the next round closes, a song from the base
+ *   playlist is queued instead. The pick is "random" but seeded by session and
+ *   round, so every peer picks the same one; songs that already played are
+ *   avoided until the whole list has had its turn.
  */
 export function derive(
   events: Iterable<AppEvent>,
@@ -49,6 +54,33 @@ export function derive(
   const playlist: PlaylistEntry[] = [];
 
   const skipThreshold = Math.max(1, cfg.skipVotes ?? DEFAULT_SKIP_VOTES);
+
+  // Base playlist sets arrive in parts; a set takes effect once it's complete.
+  const baseParts = new Map<string, Map<number, Extract<AppEvent, { k: "base" }>>>();
+  // Declared via `as` so TypeScript doesn't narrow it to `null` (it's assigned inside closures).
+  let base = null as { name: string; songs: Song[] } | null;
+
+  const addBasePart = (e: Extract<AppEvent, { k: "base" }>) => {
+    if (!cfg.host || e.by !== cfg.host) return;
+    let parts = baseParts.get(e.set);
+    if (!parts) baseParts.set(e.set, (parts = new Map()));
+    if (parts.has(e.part) || (parts.size && [...parts.values()][0]!.total !== e.total)) return;
+    parts.set(e.part, e);
+    if (parts.size < e.total) return;
+    const ordered = [...parts.values()].sort((a, b) => a.part - b.part);
+    const songs = ordered.flatMap((p) => p.songs);
+    base = songs.length ? { name: ordered[0]!.name, songs } : null;
+  };
+
+  const pickBase = (r: number): Song | null => {
+    if (!base) return null;
+    const played = new Set(playlist.map((p) => p.song.id));
+    let options = base.songs.filter((s) => !played.has(s.id));
+    // Everything had its turn: start over, but don't repeat the song that just played.
+    if (!options.length) options = base.songs.filter((s) => s.id !== playlist.at(-1)?.song.id);
+    if (!options.length) options = base.songs;
+    return options[Math.floor(seededRandom(`${cfg.topic}:${r}`) * options.length)]!;
+  };
 
   const skip = (e: Extract<AppEvent, { k: "skip" }>) => {
     const i = playlist.findIndex((p) => p.round === e.round && p.song.id === e.songId);
@@ -69,7 +101,9 @@ export function derive(
 
   const apply = (e: AppEvent) => {
     if (e.k === "end") return;
-    if (e.k === "skip") {
+    if (e.k === "base") {
+      addBasePart(e);
+    } else if (e.k === "skip") {
       skip(e);
     } else if (e.k === "propose") {
       if (!pool.has(e.song.id) && e.ts >= (wonAt.get(e.song.id) ?? -Infinity)) {
@@ -121,30 +155,43 @@ export function derive(
     const boundary = roundEnd(r);
     while (i < sorted.length && sorted[i]!.ts < boundary) apply(sorted[i++]!);
 
+    const queue = (song: Song, votes: number, source: PlaylistEntry["source"]) => {
+      const startAt = Math.max(boundary, playlist.at(-1)?.endAt ?? 0);
+      playlist.push({
+        song,
+        round: r,
+        votes,
+        closedAt: boundary,
+        startAt,
+        endAt: startAt + song.durationS * 1000,
+        skippers: [],
+        skipped: false,
+        source,
+      });
+    };
+
     if (queuedAt(boundary) < cfg.maxQueue) {
       const winner = tally()[0];
       if (winner && winner.votes > 0) {
-        const prevEnd = playlist.at(-1)?.endAt ?? 0;
-        const startAt = Math.max(boundary, prevEnd);
-        playlist.push({
-          song: winner.song,
-          round: r,
-          votes: winner.votes,
-          closedAt: boundary,
-          startAt,
-          endAt: startAt + winner.song.durationS * 1000,
-          skippers: [],
-          skipped: false,
-        });
+        queue(winner.song, winner.votes, "vote");
         pool.delete(winner.song.id);
         wonAt.set(winner.song.id, boundary);
+      } else if ((playlist.at(-1)?.endAt ?? 0) < roundEnd(r + 1)) {
+        // Nobody voted and the music would stop before the next round closes.
+        const fill = pickBase(r);
+        if (fill) queue(fill, 0, "base");
       }
     }
 
-    // Nothing to vote on: skip ahead to the round of the next event.
+    // Nothing to vote on: skip ahead to the next round where something can happen,
+    // i.e. the next event, or (with a base playlist) when the queue needs a refill.
     if (pool.size === 0) {
       const next = sorted[i];
-      const target = next ? Math.floor((next.ts - cfg.epoch) / cfg.roundMs) : currentRound;
+      let target = next ? Math.floor((next.ts - cfg.epoch) / cfg.roundMs) : currentRound;
+      if (base) {
+        const lastEnd = playlist.at(-1)?.endAt ?? 0;
+        target = Math.min(target, Math.floor((lastEnd - cfg.epoch) / cfg.roundMs) - 1);
+      }
       r = Math.max(r + 1, Math.min(target, currentRound));
     } else {
       r++;
@@ -173,7 +220,18 @@ export function derive(
     playlist,
     nowPlaying: current ? { entry: current, positionMs: now - current.startAt } : null,
     endedAt: endedAt !== null && endedAt <= now ? endedAt : null,
+    base: base ? { name: base.name, songs: base.songs.length } : null,
   };
+}
+
+/** Deterministic value in [0, 1) from a string (FNV-1a hash into mulberry32). */
+export function seededRandom(key: string): number {
+  let h = 2166136261;
+  for (let i = 0; i < key.length; i++) h = Math.imul(h ^ key.charCodeAt(i), 16777619);
+  let t = (h + 0x6d2b79f5) >>> 0;
+  t = Math.imul(t ^ (t >>> 15), t | 1);
+  t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+  return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
 }
 
 /** Song ids the given voter currently has an active (counting) vote on. */
@@ -182,10 +240,13 @@ export function votesOf(state: DerivedState, voter: string): Set<string> {
 }
 
 /**
- * Songs worth keeping after the party, in play order: everything that made the
- * playlist except songs the crowd skipped, each video once.
+ * Songs worth keeping after the party, in play order: everything that actually
+ * started playing by `now` (voted or from the base playlist), except songs the
+ * crowd skipped, each video once.
  */
-export function keepers(playlist: PlaylistEntry[]): Song[] {
+export function keepers(playlist: PlaylistEntry[], now = Infinity): Song[] {
   const seen = new Set<string>();
-  return playlist.filter((p) => !p.skipped && !seen.has(p.song.id) && seen.add(p.song.id)).map((p) => p.song);
+  return playlist
+    .filter((p) => p.startAt <= now && !p.skipped && !seen.has(p.song.id) && seen.add(p.song.id))
+    .map((p) => p.song);
 }

@@ -84,6 +84,7 @@ h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 1px; color: var
 
 .compact .song { padding: 6px 10px 6px 6px; }
 .compact img { width: 36px; height: 36px; border-radius: 8px; }
+.tag { flex: none; font-size: 11px; color: var(--muted); border: 1px solid #ffffff22; border-radius: 999px; padding: 1px 7px; }
 .compact .when { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
 
 .empty { color: var(--muted); text-align: center; padding: 24px 0; }

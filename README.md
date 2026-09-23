@@ -20,10 +20,13 @@ bun run dev          # or: bun run start (production mode)
 
 1. Open `http://localhost:3000/display` on the big screen and log in (see
    [Display password](#display-password)). This starts a session.
-2. Scan the QR code with phones. They open the voting page (`/`) on the host's LAN address.
+2. Scan the QR code with phones. The voting page is only reachable through that code
+   (see [Joining](#joining)).
 3. Search, tap **+** to propose a song and vote for it, and tap **♥** to vote or unvote.
    Tap the skip button in the now-playing bar to vote to skip the current song.
 4. On the display, click **♪ Enable sound** to play the schedule through the YouTube player.
+   Optionally click **Base playlist** and paste a YouTube Music playlist link: when nobody votes,
+   random songs from it keep the music going.
 5. When the party is over, click **End session** on the display. Voting stops, the music ends,
    and phones show what was played. Then click **Save playlist to YouTube Music**. See
    [Saving playlists](#saving-playlists-to-youtube-music) for the one-time setup.
@@ -51,10 +54,36 @@ Env:
 | `GOOGLE_CLIENT_ID`      | Optional. Enables saving playlists to YouTube.                       |
 | `AUDIA_SESSION_FILE`    | Where the current session is kept (default `.audia-session.json`).   |
 
+## Joining
+
+Guests can only reach the voting page by scanning the display's QR code. Each session has a
+random join token, and the QR code points at `/join/<token>`. That link sets an HttpOnly cookie
+and redirects to the voting page. The page and the phone APIs (session lookup, search, peer
+heartbeat) require the cookie, and everyone else gets a "scan the QR code" page.
+
+Starting a new session or ending the current one creates or voids the token, so old QR codes
+and cookies stop working. The display itself gets in with its password. Without
+`DISPLAY_PASSWORD_HASH` nothing is protected, which keeps local development setup-free.
+
+## Base playlist
+
+Click **Base playlist** on the display and paste a YouTube Music (or YouTube) playlist link.
+Public and unlisted playlists work; auto-generated charts and radio mixes can't be read.
+
+- When a round closes without a voted song and the music would stop before the next round,
+  a random song from the base playlist is queued instead. A song with even one vote always wins.
+- Every peer picks the same song, because the choice is seeded by session and round. Songs
+  that already played are avoided until the whole list has had its turn.
+- Base songs show an "auto" tag. Only the display that started the session can set or remove
+  the base playlist, which holds up to 400 songs.
+- The saved playlist and the phones' "Played tonight" list contain only songs that actually
+  started playing, both voted and base, minus skipped songs.
+
 ## Display password
 
-`/display` and the endpoints only it uses (`/api/info`, and changing or ending the session) are
-protected with HTTP Basic auth. The phone pages stay open.
+`/display` and the endpoints only it uses (`/api/info`, `/api/playlist`, the QR code target,
+and changing or ending the session) are protected with HTTP Basic auth. Phones get in through
+the QR code instead (see [Joining](#joining)).
 
 The password is never stored in plain text. Generate a salted argon2id hash and put it in the environment:
 
@@ -72,7 +101,7 @@ answers 429 until the window has passed.
 
 ## Saving playlists to YouTube Music
 
-The display saves every song that made the playlist, in play order and without skipped songs,
+The display saves every song that actually played, in play order and without skipped songs,
 as a new playlist in the signed-in Google account. It shows up in both YouTube and YouTube Music.
 Sign-in happens entirely in the browser (Google Identity Services), and the server only knows
 the public client ID.
@@ -100,8 +129,8 @@ topic. Browsers can't use UDP, so traffic goes through iroh relays (n0's public 
 The crate also exposes ed25519 `sign` and `verify`, so every event is signed with the author's
 endpoint key and nobody can vote under someone else's id.
 
-**Replicated event log** (`src/client/session.ts`): peers exchange signed `propose`, `vote` and `skip`
-events. When a neighbour comes up, each side sends its full log in chunks, so late joiners and
+**Replicated event log** (`src/client/session.ts`): peers exchange signed `propose`, `vote`,
+`skip`, `base` and `end` events. When a neighbour comes up, each side sends its full log in chunks, so late joiners and
 reloaded phones catch up. The log is also kept in `localStorage`. The Bun host keeps a
 directory of recently seen peers (`/api/session`), and a peer with no neighbours keeps
 re-dialling fresh ones.
@@ -117,6 +146,7 @@ the same log, so there is no leader.
   seekbar position are computed from this schedule on every device.
 - A skip vote counts only while its song is playing. When `skip` different people have voted,
   the song ends at the moment of the last vote and the rest of the playlist moves up.
+- If nobody voted and the queue would run dry, a seeded-random base playlist song fills the gap.
 
 **Search** (`src/server.ts`): YouTube Music has no official public API. The server proxies
 `/api/search` through [`ytmusic-api`](https://www.npmjs.com/package/ytmusic-api), the unofficial
@@ -125,7 +155,7 @@ InnerTube API, because browsers can't call it directly (CORS).
 ## Development
 
 ```sh
-bun test                 # reducer + protocol tests
+bun test                 # reducer, protocol, auth, join token and YouTube client tests
 bun run typecheck
 bun run build:wasm       # rebuild src/wasm/ from crates/audia-gossip
 ```

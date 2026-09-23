@@ -63,7 +63,7 @@ function renderLists() {
   document.body.classList.toggle("session-ended", ended);
   $("ended").hidden = !ended;
   if (ended) {
-    const played = keepers(st.playlist);
+    const played = keepers(st.playlist, now);
     $("ended-list").innerHTML = played.length
       ? played
           .map(
@@ -110,6 +110,7 @@ function renderLists() {
           <div class="title">${escapeHtml(p.song.title)}</div>
           <div class="artist">${escapeHtml(p.song.artist)}</div>
         </div>
+        ${p.source === "base" ? `<span class="tag">auto</span>` : ""}
         <span class="when" data-start="${p.startAt}">in ${fmtTime(p.startAt - now)}</span>
       </li>`,
     )
@@ -272,7 +273,7 @@ $("skip").addEventListener("click", async () => {
 const ticket = await Session.findTicket();
 if (!ticket) {
   document.querySelector("main")!.innerHTML =
-    `<div class="gate">No voting session yet.<br/>Open <a href="/display">/display</a> on the big screen to start one, then scan its QR code.</div>`;
+    `<div class="gate">No voting session right now.<br/>Scan the QR code on the big screen to join.</div>`;
   statusEl.textContent = "no session";
 } else {
   session = await Session.start(ticket, (s) => {

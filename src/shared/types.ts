@@ -59,12 +59,26 @@ export interface SkipEvent extends EventBase {
   round: number;
 }
 
+/**
+ * One part of the host's base playlist (fallback songs when nobody votes).
+ * Big lists are split into parts that share `set`; a set counts once all
+ * `total` parts are there. A set with no songs removes the base playlist.
+ */
+export interface BaseEvent extends EventBase {
+  k: "base";
+  set: string;
+  part: number;
+  total: number;
+  name: string;
+  songs: Song[];
+}
+
 /** The host ends the session: nothing after `ts` counts, the music stops. */
 export interface EndEvent extends EventBase {
   k: "end";
 }
 
-export type AppEvent = ProposeEvent | VoteEvent | SkipEvent | EndEvent;
+export type AppEvent = ProposeEvent | VoteEvent | SkipEvent | BaseEvent | EndEvent;
 
 /** Messages on the gossip wire (JSON, utf-8). */
 export type WireMessage =
@@ -92,6 +106,8 @@ export interface PlaylistEntry {
   skippers: string[];
   /** Ended early because enough skip votes came in. */
   skipped: boolean;
+  /** Voted in by the crowd, or picked from the base playlist because nobody voted. */
+  source: "vote" | "base";
 }
 
 export interface DerivedState {
@@ -102,4 +118,6 @@ export interface DerivedState {
   nowPlaying: { entry: PlaylistEntry; positionMs: number } | null;
   /** When the host ended the session, if it has. */
   endedAt: number | null;
+  /** The base playlist currently in effect, if any. */
+  base: { name: string; songs: number } | null;
 }

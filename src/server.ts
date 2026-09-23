@@ -5,7 +5,17 @@ import YTMusic from "ytmusic-api";
 import vote from "./client/vote.html";
 import display from "./client/display.html";
 import { basicAuth, clientAddress, decodePasswordHash } from "./auth";
-import { decodeTicket, encodeTicket, type Ticket } from "./shared/protocol";
+import {
+  gatePage,
+  hasJoined,
+  isSecure,
+  joinCookie,
+  newJoinToken,
+  parseSession,
+  serializeSession,
+  tokenMatches,
+} from "./join";
+import { BASE_PART_SIZE, MAX_BASE_PARTS, decodeTicket, encodeTicket, type Ticket } from "./shared/protocol";
 import type { Song } from "./shared/types";
 
 const PORT = Number(process.env.PORT ?? 3000);
@@ -31,10 +41,21 @@ const guarded =
     (await auth.check(req, clientAddress(req, server.requestIP(req)?.address))) ?? handler(req, server);
 
 /**
- * Bun can't put a check in front of an HTML import route, so the bundled display page
- * lives at an unguessable path and `/display` proxies to it after authenticating.
+ * Bun can't put a check in front of an HTML import route, so the bundled pages live
+ * at unguessable paths and `/display` and `/` proxy to them after checking access.
  */
 const DISPLAY_BUNDLE_PATH = `/_display-${randomUUID()}`;
+const VOTE_BUNDLE_PATH = `/_vote-${randomUUID()}`;
+
+async function serveBundle(path: string, req: Request, server: Bun.Server<undefined>): Promise<Response> {
+  const res = await fetch(`http://127.0.0.1:${server.port}${path}`, {
+    headers: { accept: req.headers.get("accept") ?? "text/html" },
+  });
+  return new Response(res.body, {
+    status: res.status,
+    headers: { "content-type": res.headers.get("content-type") ?? "text/html", "cache-control": "no-store" },
+  });
+}
 
 // --- YouTube Music search (unofficial InnerTube API; browsers can't call it due to CORS) ---
 
@@ -42,36 +63,101 @@ const yt = new YTMusic();
 const ytReady = yt.initialize().catch((e) => console.error("ytmusic init failed:", e));
 const searchCache = new Map<string, { at: number; songs: Song[] }>();
 
+type YtTrack = {
+  videoId: string;
+  name: string;
+  artist?: { name: string } | null;
+  album?: { name: string } | null;
+  duration: number | null;
+  thumbnails: { url: string; width: number }[];
+};
+
+/** Map a ytmusic-api result to our Song, or null if it can't be played in a session. */
+function toSong(s: YtTrack): Song | null {
+  // Events reject songs without a duration or longer than an hour (mixes, livestreams).
+  if (!s.videoId || !s.duration || s.duration >= 3600) return null;
+  const thumb = [...s.thumbnails].sort((a, b) => b.width - a.width)[0]?.url.replace(/=w\d+-h\d+/, "=w400-h400");
+  return {
+    id: s.videoId,
+    title: s.name.slice(0, 300),
+    artist: (s.artist?.name ?? "Unknown").slice(0, 300),
+    album: s.album?.name?.slice(0, 300) || undefined,
+    durationS: s.duration,
+    thumb: thumb?.startsWith("https://") && thumb.length <= 1000 ? thumb : undefined,
+  };
+}
+
 async function search(q: string): Promise<Song[]> {
   const key = q.toLowerCase();
   const hit = searchCache.get(key);
   if (hit && Date.now() - hit.at < 10 * 60_000) return hit.songs;
   await ytReady;
   const songs = (await yt.searchSongs(q))
-    .filter((s) => s.videoId && s.duration)
-    .slice(0, 20)
-    .map((s) => ({
-      id: s.videoId,
-      title: s.name,
-      artist: s.artist?.name ?? "Unknown",
-      album: s.album?.name || undefined,
-      durationS: s.duration!,
-      thumb: [...s.thumbnails].sort((a, b) => b.width - a.width)[0]?.url.replace(/=w\d+-h\d+/, "=w400-h400"),
-    }));
+    .map(toSong)
+    .filter((s): s is Song => s !== null)
+    .slice(0, 20);
   if (searchCache.size > 500) searchCache.clear();
   searchCache.set(key, { at: Date.now(), songs });
   return songs;
 }
 
-// --- Session directory: lets phones join without a ticket in the URL ---
+/** Largest base playlist; matches BASE_PART_SIZE × MAX_BASE_PARTS in the protocol. */
+const MAX_BASE_SONGS = BASE_PART_SIZE * MAX_BASE_PARTS;
+
+/** Accepts a playlist id or any YouTube / YouTube Music URL with `list=`. */
+function playlistIdFrom(input: string): string | null {
+  let id = input.trim();
+  try {
+    id = new URL(id).searchParams.get("list") ?? "";
+  } catch {}
+  id = id.replace(/^VL/, "");
+  return /^[A-Za-z0-9_-]{10,80}$/.test(id) ? id : null;
+}
+
+async function loadPlaylist(id: string): Promise<{ name: string; songs: Song[] }> {
+  await ytReady;
+  const [meta, videos] = await Promise.all([yt.getPlaylist(id).catch(() => null), yt.getPlaylistVideos(id)]);
+  const seen = new Set<string>();
+  const songs = videos
+    .map(toSong)
+    .filter((s): s is Song => s !== null && !seen.has(s.id) && !!seen.add(s.id))
+    .slice(0, MAX_BASE_SONGS);
+  return { name: (meta?.name || "Base playlist").slice(0, 200), songs };
+}
+
+// --- Session directory: lets phones that scanned the QR code find the session ---
 
 let session: Ticket | null = null;
+/** Secret in the display's QR code; phones need it (as a cookie) to reach the voting page. */
+let joinToken: string | null = null;
 const peers = new Map<string, { relay?: string; seen: number }>();
 
 try {
-  session = decodeTicket(await Bun.file(SESSION_FILE).text());
-  if (session) console.log(`restored session "${session.cfg.name}" (${session.cfg.topic.slice(0, 8)}…)`);
+  const stored = parseSession(await Bun.file(SESSION_FILE).text());
+  if (stored) {
+    ({ ticket: session, joinToken } = stored);
+    console.log(`restored session "${session.cfg.name}" (${session.cfg.topic.slice(0, 8)}…)`);
+  }
 } catch {}
+
+const saveSession = () =>
+  session && joinToken ? Bun.write(SESSION_FILE, serializeSession({ ticket: session, joinToken })) : Promise.resolve(0);
+
+/**
+ * Phone-side endpoints: open to phones that joined via the current QR code, and to
+ * the display (Basic auth). Without a display password nothing is protected, so
+ * local development keeps working without setup.
+ */
+const members =
+  (handler: Handler): Handler =>
+  async (req, server) => {
+    if (!auth.enabled || hasJoined(req, joinToken)) return handler(req, server);
+    if (req.headers.has("authorization")) return guarded(handler)(req, server);
+    return Response.json({ error: "Scan the QR code on the display to join." }, { status: 403 });
+  };
+
+const notJoined = () =>
+  gatePage("Scan to join", "Voting is only open to guests who scan the QR code on the big screen.");
 
 function currentTicket(): string | null {
   if (!session) return null;
@@ -96,17 +182,22 @@ const server = Bun.serve({
   hostname: "0.0.0.0",
   development: process.env.NODE_ENV !== "production",
   routes: {
-    "/": vote,
+    [VOTE_BUNDLE_PATH]: vote,
     [DISPLAY_BUNDLE_PATH]: display,
-    "/display": guarded(async (req, server) => {
-      const res = await fetch(`http://127.0.0.1:${server.port}${DISPLAY_BUNDLE_PATH}`, {
-        headers: { accept: req.headers.get("accept") ?? "text/html" },
+    "/": (req, server) =>
+      !auth.enabled || hasJoined(req, joinToken) ? serveBundle(VOTE_BUNDLE_PATH, req, server) : notJoined(),
+    "/display": guarded((req, server) => serveBundle(DISPLAY_BUNDLE_PATH, req, server)),
+
+    /** Target of the display's QR code: remember the session's token, then open the voting page. */
+    "/join/:token": (req: Request & { params: Record<string, string | undefined> }) => {
+      if (!session || !tokenMatches(req.params.token ?? "", joinToken)) {
+        return gatePage("This code has expired", "That QR code belongs to a session that has ended. Scan the one on the big screen.");
+      }
+      return new Response(null, {
+        status: 302,
+        headers: { location: "/", "set-cookie": joinCookie(joinToken!, isSecure(req)), "cache-control": "no-store" },
       });
-      return new Response(res.body, {
-        status: res.status,
-        headers: { "content-type": res.headers.get("content-type") ?? "text/html", "cache-control": "no-store" },
-      });
-    }),
+    },
 
     "/wasm/audia_gossip_bg.wasm": () =>
       new Response(Bun.file(new URL("./wasm/audia_gossip_bg.wasm", import.meta.url).pathname), {
@@ -117,7 +208,7 @@ const server = Bun.serve({
 
     "/api/info": guarded(() => Response.json({ lan: lanUrls(), googleClientId: GOOGLE_CLIENT_ID })),
 
-    "/api/search": async (req) => {
+    "/api/search": members(async (req) => {
       const q = new URL(req.url).searchParams.get("q")?.trim().slice(0, 200);
       if (!q) return Response.json([]);
       try {
@@ -126,44 +217,74 @@ const server = Bun.serve({
         console.error("search failed:", e);
         return Response.json({ error: "search failed" }, { status: 502 });
       }
-    },
+    }),
+
+    /** Read a YouTube Music playlist to use as the session's base playlist (display only). */
+    "/api/playlist": guarded(async (req) => {
+      const id = playlistIdFrom(new URL(req.url).searchParams.get("list") ?? "");
+      if (!id) return Response.json({ error: "That doesn't look like a playlist link." }, { status: 400 });
+      try {
+        const list = await loadPlaylist(id);
+        if (!list.songs.length) return Response.json({ error: "No playable songs in that playlist." }, { status: 422 });
+        return Response.json(list);
+      } catch (e) {
+        console.error("playlist load failed:", id, e);
+        return Response.json(
+          { error: "Couldn't read that playlist. Use a public or unlisted playlist you made (not a chart or radio mix)." },
+          { status: 502 },
+        );
+      }
+    }),
 
     "/api/session": {
-      GET: () => {
+      GET: members(() => {
         const ticket = currentTicket();
         return ticket ? Response.json({ ticket }) : Response.json({ error: "no session" }, { status: 404 });
-      },
+      }),
       PUT: guarded(async (req) => {
         const t = decodeTicket(((await req.json()) as { ticket?: string }).ticket ?? "");
         if (!t) return Response.json({ error: "bad ticket" }, { status: 400 });
-        if (t.cfg.topic !== session?.cfg.topic) peers.clear();
+        // A new session gets a new join token, which locks out phones from the old one.
+        if (t.cfg.topic !== session?.cfg.topic) {
+          peers.clear();
+          joinToken = newJoinToken();
+        }
         session = t;
-        await Bun.write(SESSION_FILE, encodeTicket(t));
+        joinToken ??= newJoinToken();
+        await saveSession();
         return Response.json({ ok: true });
       }),
-      /** Session ended: stop handing it out to new visitors. */
+      /** Session ended: stop handing it out, and void its QR code. */
       DELETE: guarded(async () => {
         session = null;
+        joinToken = null;
         peers.clear();
         await unlink(SESSION_FILE).catch(() => {});
         return Response.json({ ok: true });
       }),
     },
 
+    /** The display asks for its QR code target. */
+    "/api/session/join": guarded(() =>
+      session && joinToken
+        ? Response.json({ path: `/join/${joinToken}` })
+        : Response.json({ error: "no session" }, { status: 404 }),
+    ),
+
     "/api/session/peers": {
-      POST: async (req) => {
+      POST: members(async (req) => {
         const { topic, id, relay } = (await req.json()) as { topic?: string; id?: string; relay?: string };
         if (!session || topic !== session.cfg.topic || typeof id !== "string" || id.length > 128) {
           return Response.json({ ok: false });
         }
         peers.set(id, { relay: typeof relay === "string" ? relay : undefined, seen: Date.now() });
         return Response.json({ ok: true });
-      },
+      }),
     },
   },
 });
 
 console.log(`audia running
   display: ${server.url}display
-  vote:    ${server.url}
+  phones:  scan the QR code on the display (${server.url}join/<token>)
   LAN:     ${lanUrls().join(", ") || "-"}`);

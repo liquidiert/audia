@@ -15,16 +15,25 @@ export function randomId(bytes = 12): string {
   return toHex(crypto.getRandomValues(new Uint8Array(bytes)));
 }
 
+/** Songs per `base` event; keeps each event around 10 KB, well inside a gossip frame. */
+export const BASE_PART_SIZE = 40;
+/** Largest base playlist accepted (parts × part size). */
+export const MAX_BASE_PARTS = 10;
+
+const songFields = (s: Song) => [s.id, s.title, s.artist, s.album ?? "", s.durationS, s.thumb ?? ""];
+
 /** Canonical bytes an event signature covers: everything except `sig`, fixed key order. */
 export function signingBytes(e: AppEvent): Uint8Array {
   const body =
     e.k === "propose"
-      ? [e.k, e.id, e.by, e.ts, e.song.id, e.song.title, e.song.artist, e.song.album ?? "", e.song.durationS, e.song.thumb ?? ""]
+      ? [e.k, e.id, e.by, e.ts, ...songFields(e.song)]
       : e.k === "vote"
         ? [e.k, e.id, e.by, e.ts, e.songId, e.on]
         : e.k === "skip"
           ? [e.k, e.id, e.by, e.ts, e.songId, e.round]
-          : [e.k, e.id, e.by, e.ts];
+          : e.k === "base"
+            ? [e.k, e.id, e.by, e.ts, e.set, e.part, e.total, e.name, e.songs.map(songFields)]
+            : [e.k, e.id, e.by, e.ts];
   return enc.encode(JSON.stringify(body));
 }
 
@@ -53,6 +62,15 @@ export function validEvent(e: unknown, now: number): e is AppEvent {
   if (x.k === "vote") return str(x.songId, 32) && typeof x.on === "boolean";
   if (x.k === "skip") return str(x.songId, 32) && Number.isInteger(x.round) && x.round >= 0;
   if (x.k === "end") return true;
+  if (x.k === "base") {
+    return (
+      str(x.set, 64) &&
+      str(x.name, 200) &&
+      Number.isInteger(x.total) && x.total >= 1 && x.total <= MAX_BASE_PARTS &&
+      Number.isInteger(x.part) && x.part >= 0 && x.part < x.total &&
+      Array.isArray(x.songs) && x.songs.length <= BASE_PART_SIZE && x.songs.every(validSong)
+    );
+  }
   return false;
 }
 
