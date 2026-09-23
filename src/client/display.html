@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>audia · display</title>
+    <link rel="stylesheet" href="./display.css" />
+  </head>
+  <body>
+    <div id="stage" class="stage"></div>
+
+    <header class="hud">
+      <div class="logo">audia</div>
+      <div id="session-name" class="session-name"></div>
+      <div class="round">
+        <svg class="ring" viewBox="0 0 36 36" aria-hidden="true">
+          <circle cx="18" cy="18" r="15.5" class="ring-bg" />
+          <circle id="ring-fg" cx="18" cy="18" r="15.5" class="ring-fg" pathLength="100" />
+        </svg>
+        <div>
+          <div id="round-label" class="round-label"></div>
+          <div id="round-time" class="round-time"></div>
+        </div>
+      </div>
+      <div id="status" class="status" data-status="starting">starting…</div>
+    </header>
+
+    <aside class="side">
+      <section class="qr-card">
+        <div id="qr" class="qr"></div>
+        <div>
+          <div class="qr-title">Scan to vote</div>
+          <div id="qr-url" class="qr-url"></div>
+        </div>
+      </section>
+      <section class="queue">
+        <h2>Up next</h2>
+        <ol id="next" class="list"></ol>
+        <p id="next-empty" class="muted">The winner of this round plays next.</p>
+        <h2>Played</h2>
+        <ol id="played" class="list played"></ol>
+      </section>
+      <div class="controls">
+        <button id="sound" type="button">♪ Enable sound</button>
+        <button id="new-session" type="button" class="ghost">New session</button>
+      </div>
+    </aside>
+
+    <div id="empty" class="empty" hidden>
+      <div class="empty-title">No songs yet</div>
+      <div class="muted">Scan the QR code and propose something.</div>
+    </div>
+
+    <div id="yt-wrap" class="yt-wrap" hidden><div id="yt"></div></div>
+
+    <footer id="pill" class="pill idle">
+      <img id="pill-thumb" alt="" />
+      <div class="pill-body">
+        <div class="pill-meta">
+          <span id="pill-title" class="pill-title">Nothing playing</span>
+          <span id="pill-artist" class="pill-artist">Waiting for the first round to close</span>
+        </div>
+        <div class="seek">
+          <span id="pill-pos" class="time">0:00</span>
+          <div class="track"><div id="pill-bar" class="bar"></div><div id="pill-knob" class="knob"></div></div>
+          <span id="pill-dur" class="time">0:00</span>
+        </div>
+      </div>
+    </footer>
+
+    <script type="module" src="./display.ts"></script>
+  </body>
+</html>

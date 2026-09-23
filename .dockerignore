@@ -1,0 +1,6 @@
+node_modules
+crates
+scripts
+.git
+.audia-session.json
+*.log

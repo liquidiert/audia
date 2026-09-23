@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#0b0b12" />
+    <title>audia · vote</title>
+    <link rel="stylesheet" href="./vote.css" />
+  </head>
+  <body>
+    <header class="top">
+      <div class="brand">
+        <span class="logo">audia</span>
+        <span id="status" class="status" data-status="starting">starting…</span>
+      </div>
+      <div id="round" class="round"></div>
+    </header>
+
+    <form id="search-form" class="search" autocomplete="off">
+      <input id="q" type="search" placeholder="Search YouTube Music…" enterkeyhint="search" />
+      <button id="clear" type="button" class="clear" hidden aria-label="Clear search">✕</button>
+    </form>
+
+    <main>
+      <section id="results" hidden>
+        <h2>Results</h2>
+        <ul id="result-list" class="songs"></ul>
+      </section>
+
+      <section id="voting">
+        <div class="section-head">
+          <h2>Vote</h2>
+          <span id="votes-left" class="pill-small"></span>
+        </div>
+        <ul id="candidate-list" class="songs"></ul>
+        <p id="empty" class="empty" hidden>No songs yet. Search above to propose one.</p>
+      </section>
+
+      <section id="next-section" hidden>
+        <h2>Up next</h2>
+        <ul id="next-list" class="songs compact"></ul>
+      </section>
+    </main>
+
+    <footer id="now" class="now" hidden>
+      <img id="now-thumb" alt="" />
+      <div class="now-meta">
+        <div id="now-title" class="title"></div>
+        <div id="now-artist" class="artist"></div>
+        <div class="bar"><div id="now-bar"></div></div>
+      </div>
+    </footer>
+
+    <div id="toast" class="toast" hidden></div>
+    <script type="module" src="./vote.ts"></script>
+  </body>
+</html>
