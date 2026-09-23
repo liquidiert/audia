@@ -36,7 +36,7 @@ const info: Promise<{ lan?: string[]; googleClientId?: string | null }> = fetch(
 async function resolveTicket(): Promise<{ ticket: Ticket | null; fresh: boolean }> {
   const params = new URLSearchParams(location.search);
   if (!params.has("new")) {
-    const t = await Session.findTicket();
+    const t = await Session.findTicket("display");
     if (t) return { ticket: t, fresh: false };
   }
   const num = (k: string) => (params.has(k) ? Number(params.get(k)) : undefined);
@@ -67,7 +67,7 @@ async function renderQr() {
   // The QR code carries the session's join token; phones without it can't open the voting page.
   let path: string | undefined;
   try {
-    const res = await fetch("/api/session/join");
+    const res = await fetch("/api/display/session");
     if (res.ok) path = (await res.json()).path;
   } catch {}
   if (!path) {
@@ -430,14 +430,27 @@ $("ended-new").addEventListener("click", () => (location.href = "/display?new"))
 
 // --- boot ---
 
-const { ticket, fresh } = await resolveTicket();
+let resolved: Awaited<ReturnType<typeof resolveTicket>>;
+try {
+  resolved = await resolveTicket();
+} catch (e) {
+  // Don't found a new session on a failed lookup: phones in the running one would be stranded.
+  $("status").dataset.status = "offline";
+  $("status").textContent = "offline";
+  $("empty").hidden = false;
+  $("empty").innerHTML = `<div class="empty-title">Can't load the session</div><div class="muted">${escapeHtml(
+    (e as Error).message,
+  )}. Reload the page to try again.</div>`;
+  throw e;
+}
+const { ticket, fresh } = resolved;
 session = await Session.start(
   ticket,
   (s) => {
     session = s;
     renderStatus();
   },
-  { host: fresh },
+  { host: fresh, role: "display" },
 );
 if (!session.isHost) {
   for (const id of ["end-session", "base"]) {

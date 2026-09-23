@@ -127,6 +127,8 @@ async function loadPlaylist(id: string): Promise<{ name: string; songs: Song[] }
 
 // --- Session directory: lets phones that scanned the QR code find the session ---
 
+const label = (t: Ticket) => `"${t.cfg.name}" (${t.cfg.topic.slice(0, 8)}…)`;
+
 let session: Ticket | null = null;
 /** Secret in the display's QR code; phones need it (as a cookie) to reach the voting page. */
 let joinToken: string | null = null;
@@ -136,7 +138,7 @@ try {
   const stored = parseSession(await Bun.file(SESSION_FILE).text());
   if (stored) {
     ({ ticket: session, joinToken } = stored);
-    console.log(`restored session "${session.cfg.name}" (${session.cfg.topic.slice(0, 8)}…)`);
+    console.log(`restored session ${label(session)}`);
   }
 } catch {}
 
@@ -155,6 +157,18 @@ const members =
     if (req.headers.has("authorization")) return guarded(handler)(req, server);
     return Response.json({ error: "Scan the QR code on the display to join." }, { status: 403 });
   };
+
+/** Heartbeat from a peer (phone or display): remember it as a bootstrap candidate. */
+const registerPeer: Handler = async (req) => {
+  const { topic, id, relay } = (await req.json()) as { topic?: string; id?: string; relay?: string };
+  if (!session || topic !== session.cfg.topic || typeof id !== "string" || id.length > 128) {
+    return Response.json({ ok: false });
+  }
+  peers.set(id, { relay: typeof relay === "string" ? relay : undefined, seen: Date.now() });
+  return Response.json({ ok: true });
+};
+
+let joinsThisSession = 0;
 
 const notJoined = () =>
   gatePage("Scan to join", "Voting is only open to guests who scan the QR code on the big screen.");
@@ -191,8 +205,10 @@ const server = Bun.serve({
     /** Target of the display's QR code: remember the session's token, then open the voting page. */
     "/join/:token": (req: Request & { params: Record<string, string | undefined> }) => {
       if (!session || !tokenMatches(req.params.token ?? "", joinToken)) {
+        console.log("join rejected: expired or unknown QR code");
         return gatePage("This code has expired", "That QR code belongs to a session that has ended. Scan the one on the big screen.");
       }
+      console.log(`phone joined ${label(session)} via QR code (${++joinsThisSession} this session)`);
       return new Response(null, {
         status: 302,
         headers: { location: "/", "set-cookie": joinCookie(joinToken!, isSecure(req)), "cache-control": "no-store" },
@@ -248,6 +264,8 @@ const server = Bun.serve({
         if (t.cfg.topic !== session?.cfg.topic) {
           peers.clear();
           joinToken = newJoinToken();
+          joinsThisSession = 0;
+          console.log(session ? `session ${label(session)} replaced by ${label(t)}` : `session ${label(t)} started`);
         }
         session = t;
         joinToken ??= newJoinToken();
@@ -256,6 +274,7 @@ const server = Bun.serve({
       }),
       /** Session ended: stop handing it out, and void its QR code. */
       DELETE: guarded(async () => {
+        if (session) console.log(`session ${label(session)} ended`);
         session = null;
         joinToken = null;
         peers.clear();
@@ -264,23 +283,20 @@ const server = Bun.serve({
       }),
     },
 
-    /** The display asks for its QR code target. */
-    "/api/session/join": guarded(() =>
-      session && joinToken
-        ? Response.json({ path: `/join/${joinToken}` })
-        : Response.json({ error: "no session" }, { status: 404 }),
-    ),
+    /**
+     * The display's view of the session: the ticket and its QR code target. Basic auth
+     * challenges when credentials are missing, so the browser always sends them; a
+     * refusal here must never look like "no session" (the display would found a new one).
+     */
+    "/api/display/session": guarded(() => {
+      const ticket = currentTicket();
+      return ticket && joinToken
+        ? Response.json({ ticket, path: `/join/${joinToken}` })
+        : Response.json({ error: "no session" }, { status: 404 });
+    }),
+    "/api/display/peers": { POST: guarded(registerPeer) },
 
-    "/api/session/peers": {
-      POST: members(async (req) => {
-        const { topic, id, relay } = (await req.json()) as { topic?: string; id?: string; relay?: string };
-        if (!session || topic !== session.cfg.topic || typeof id !== "string" || id.length > 128) {
-          return Response.json({ ok: false });
-        }
-        peers.set(id, { relay: typeof relay === "string" ? relay : undefined, seen: Date.now() });
-        return Response.json({ ok: true });
-      }),
-    },
+    "/api/session/peers": { POST: members(registerPeer) },
   },
 });
 

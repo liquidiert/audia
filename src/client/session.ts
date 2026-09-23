@@ -24,6 +24,17 @@ const logKey = (topic: string) => `audia.log.${topic}`;
 
 export type Status = "starting" | "connecting" | "online" | "offline";
 
+/**
+ * Phones reach the session through cookie-gated endpoints (they joined via the QR
+ * code); the display through Basic-auth ones, which challenge for the password
+ * instead of refusing, so the browser always sends its credentials.
+ */
+export type Role = "phone" | "display";
+const ENDPOINTS: Record<Role, { session: string; peers: string }> = {
+  phone: { session: "/api/session", peers: "/api/session/peers" },
+  display: { session: "/api/display/session", peers: "/api/display/peers" },
+};
+
 /** Estimate the offset between this device and the serving host's clock. */
 async function clockOffset(): Promise<number> {
   try {
@@ -61,17 +72,27 @@ export class Session {
     private bootstrap: Ticket["peers"],
     private node: AudiaNode,
     private offset: number,
+    private role: Role,
   ) {}
 
-  /** Find the session to join: URL hash first, then the serving host's current session. */
-  static async findTicket(): Promise<Ticket | null> {
+  /**
+   * Find the session to join: URL hash first, then the serving host's current session.
+   * Returns null only when there is no session. For the display, any other failure
+   * throws: silently founding a new session would strand every phone on the old one.
+   */
+  static async findTicket(role: Role = "phone"): Promise<Ticket | null> {
     const fromHash = decodeTicket(location.hash.slice(1));
     if (fromHash) return fromHash;
+    let res: Response;
     try {
-      const res = await fetch("/api/session");
-      if (res.ok) return decodeTicket((await res.json()).ticket);
-    } catch {}
-    return null;
+      res = await fetch(ENDPOINTS[role].session);
+    } catch (e) {
+      if (role === "display") throw new Error(`Can't reach the server: ${(e as Error).message}`);
+      return null;
+    }
+    if (res.ok) return decodeTicket((await res.json()).ticket);
+    if (res.status === 404 || role === "phone") return null;
+    throw new Error(`Can't load the current session (HTTP ${res.status})`);
   }
 
   /**
@@ -82,7 +103,7 @@ export class Session {
   static async start(
     ticket: Ticket | null,
     onStatus?: (s: Session) => void,
-    opts: { host?: boolean } = {},
+    opts: { host?: boolean; role?: Role } = {},
   ): Promise<Session> {
     const [offset] = await Promise.all([clockOffset(), init({ module_or_path: WASM_URL })]);
     const stored = localStorage.getItem(KEY_STORAGE);
@@ -91,7 +112,7 @@ export class Session {
 
     const cfg = ticket?.cfg ?? newSessionConfig({ epoch: Date.now() + offset });
     if (opts.host && !cfg.host) cfg.host = node.endpointId();
-    const s = new Session(cfg, ticket?.peers ?? [], node, offset);
+    const s = new Session(cfg, ticket?.peers ?? [], node, offset, opts.role ?? "phone");
     s.status = "connecting";
     onStatus?.(s);
     s.relay = (await withTimeout(node.online(), 15_000)) ?? node.relayUrl();
@@ -208,7 +229,7 @@ export class Session {
     if (this.neighbors.size > 0) return;
     let peers = this.bootstrap;
     try {
-      const res = await fetch("/api/session");
+      const res = await fetch(ENDPOINTS[this.role].session);
       const t = res.ok ? decodeTicket((await res.json()).ticket) : null;
       if (t?.cfg.topic === this.cfg.topic) peers = t.peers;
     } catch {}
@@ -301,7 +322,7 @@ export class Session {
 
   /** Tell the serving host we're alive so it can hand us out as a bootstrap peer. */
   private heartbeat() {
-    fetch("/api/session/peers", {
+    fetch(ENDPOINTS[this.role].peers, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ topic: this.cfg.topic, id: this.id, relay: this.relay }),

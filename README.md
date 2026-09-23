@@ -81,7 +81,7 @@ Public and unlisted playlists work; auto-generated charts and radio mixes can't 
 
 ## Display password
 
-`/display` and the endpoints only it uses (`/api/info`, `/api/playlist`, the QR code target,
+`/display` and the endpoints only it uses (`/api/info`, `/api/playlist`, `/api/display/*`,
 and changing or ending the session) are protected with HTTP Basic auth. Phones get in through
 the QR code instead (see [Joining](#joining)).
 
