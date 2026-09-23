@@ -65,6 +65,8 @@ export class Session {
   private persistTimer: ReturnType<typeof setTimeout> | undefined;
   private channel!: Channel;
   private cached: { version: number; at: number; state: DerivedState } | undefined;
+  private reportTimer: ReturnType<typeof setTimeout> | undefined;
+  private lastError: string | undefined;
   private version = 0;
 
   private constructor(
@@ -203,6 +205,8 @@ export class Session {
     this.notify();
     this.heartbeat();
     setInterval(() => this.heartbeat(), 15_000);
+    // Tabs that come back to the foreground report right away (hidden tabs are throttled).
+    document.addEventListener("visibilitychange", () => this.reportSoon());
     setInterval(() => this.rejoin(), 5_000);
   }
 
@@ -249,10 +253,12 @@ export class Session {
         this.status = "online";
         this.scheduleSync();
         this.notify();
+        this.reportSoon();
         break;
       case "neighborDown":
         this.neighbors.delete(ev.peer!);
         this.notify();
+        this.reportSoon();
         break;
       case "lagged":
         // We missed messages; a full exchange with neighbors fills the gap.
@@ -260,8 +266,10 @@ export class Session {
         break;
       case "closed":
         console.error("gossip closed", ev.error);
+        this.lastError = `gossip closed: ${ev.error ?? "no error"}`.slice(0, 300);
         this.status = "offline";
         this.notify();
+        this.reportSoon();
         break;
     }
   }
@@ -325,8 +333,24 @@ export class Session {
     fetch(ENDPOINTS[this.role].peers, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ topic: this.cfg.topic, id: this.id, relay: this.relay }),
+      body: JSON.stringify({
+        topic: this.cfg.topic,
+        id: this.id,
+        relay: this.relay,
+        // Diagnostics for the server log: how this peer sees the swarm.
+        role: this.role,
+        status: this.status,
+        neighbors: this.neighbors.size,
+        visible: document.visibilityState === "visible",
+        error: this.lastError,
+      }),
     }).catch(() => {});
+  }
+
+  /** Report connection changes promptly rather than waiting for the next 15s heartbeat. */
+  private reportSoon() {
+    clearTimeout(this.reportTimer);
+    this.reportTimer = setTimeout(() => this.heartbeat(), 1000);
   }
 }
 

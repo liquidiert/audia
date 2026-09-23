@@ -160,13 +160,43 @@ const members =
 
 /** Heartbeat from a peer (phone or display): remember it as a bootstrap candidate. */
 const registerPeer: Handler = async (req) => {
-  const { topic, id, relay } = (await req.json()) as { topic?: string; id?: string; relay?: string };
+  const body = (await req.json()) as {
+    topic?: string;
+    id?: string;
+    relay?: string;
+    role?: string;
+    status?: string;
+    neighbors?: number;
+    visible?: boolean;
+    error?: string;
+  };
+  const { topic, id, relay } = body;
   if (!session || topic !== session.cfg.topic || typeof id !== "string" || id.length > 128) {
     return Response.json({ ok: false });
   }
   peers.set(id, { relay: typeof relay === "string" ? relay : undefined, seen: Date.now() });
+  logPeerReport(id, body);
   return Response.json({ ok: true });
 };
+
+/** Last diagnostics per peer; only changes are logged. */
+const peerReports = new Map<string, string>();
+function logPeerReport(id: string, b: { role?: string; status?: string; neighbors?: number; visible?: boolean; error?: string }) {
+  const str = (v: unknown, max = 40) => (typeof v === "string" ? v.slice(0, max) : "?");
+  const summary = [
+    str(b.role, 10),
+    str(b.status, 12),
+    `${typeof b.neighbors === "number" ? b.neighbors : "?"} neighbors`,
+    b.visible === false ? "tab hidden" : "tab visible",
+    b.error ? `error: ${str(b.error, 200)}` : "",
+  ]
+    .filter(Boolean)
+    .join(", ");
+  if (peerReports.get(id) === summary) return;
+  peerReports.set(id, summary);
+  if (peerReports.size > 500) peerReports.clear();
+  console.log(`peer ${id.slice(0, 10)}: ${summary}`);
+}
 
 let joinsThisSession = 0;
 
@@ -180,7 +210,10 @@ function currentTicket(): string | null {
     .filter(([, p]) => now - p.seen < PEER_TTL_MS)
     .sort((a, b) => b[1].seen - a[1].seen)
     .map(([id, p]) => ({ id, relay: p.relay }));
-  const merged = [...live, ...session.peers.filter((p) => !peers.has(p.id))].slice(0, 6);
+  // Live peers first, then the session's own bootstrap peers (the display) even if
+  // their heartbeat went quiet: a stale entry is better than handing out no one.
+  const liveIds = new Set(live.map((p) => p.id));
+  const merged = [...live, ...session.peers.filter((p) => !liveIds.has(p.id))].slice(0, 6);
   return encodeTicket({ cfg: session.cfg, peers: merged });
 }
 
