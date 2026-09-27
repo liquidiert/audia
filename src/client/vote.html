@@ -48,7 +48,15 @@
       </section>
 
       <section id="results" hidden>
-        <h2>Results</h2>
+        <div class="section-head">
+          <h2 id="results-title">Results</h2>
+          <label class="switch" title="Hide songs that already played">
+            <input type="checkbox" id="hide-played" />
+            <span class="track" aria-hidden="true"></span>
+            <span id="hide-played-label">Hide played</span>
+          </label>
+        </div>
+        <p id="results-hint" class="muted" hidden></p>
         <ul id="result-list" class="songs"></ul>
       </section>
 

@@ -42,6 +42,48 @@ const thumb = (s: Song) =>
   `<img src="${escapeHtml(s.thumb ?? "")}" data-vid="${escapeHtml(s.id)}" alt="" loading="lazy" />`;
 
 let lastSig = "";
+/** Base-only mode: guests vote songs of the base playlist up the order, no new songs. */
+let baseMode = false;
+/** Most songs shown at once when browsing the base playlist (filtering finds the rest). */
+const BASE_LIST_LIMIT = 100;
+
+/** Switch the search box between YouTube Music and the base playlist. */
+function applyMode(mode: "open" | "base") {
+  const next = mode === "base";
+  if (next === baseMode) return;
+  baseMode = next;
+  q.placeholder = baseMode ? "Search the playlist…" : "Search YouTube Music…";
+  // In base mode the playlist is the thing to browse, so it goes below the tally.
+  const voting = $("voting");
+  if (baseMode) voting.after(resultsSec);
+  else voting.before(resultsSec);
+  runSearch(q.value.trim());
+}
+
+/** "Hide played" filter; each phone remembers its choice. */
+const HIDE_PLAYED_KEY = "audia.hidePlayed";
+let hidePlayed = localStorage.getItem(HIDE_PLAYED_KEY) === "1";
+
+/** Songs that already started playing this session. */
+function playedIds(): Set<string> {
+  if (!session) return new Set();
+  const now = session.now();
+  return new Set(session.state().playlist.filter((p) => p.startAt <= now).map((p) => p.song.id));
+}
+
+/** Base playlist songs matching `term` (all of them when empty), in playlist order. */
+function baseMatches(term: string): Song[] {
+  const list = session?.state().base?.list ?? [];
+  const t = term.toLowerCase();
+  return t ? list.filter((s) => `${s.title} ${s.artist} ${s.album ?? ""}`.toLowerCase().includes(t)) : list;
+}
+
+/** What to list in base mode: matches, minus played songs if hidden, capped. */
+function baseResults(term: string): Song[] {
+  const played = playedIds();
+  const matches = baseMatches(term);
+  return (hidePlayed ? matches.filter((s) => !played.has(s.id)) : matches).slice(0, BASE_LIST_LIMIT);
+}
 
 function renderLists() {
   if (!session) return;
@@ -50,7 +92,11 @@ function renderLists() {
   const now = session.now();
   const upcoming = st.playlist.filter((p) => p.startAt > now);
   // Only touch the DOM when something visible changed, so taps don't hit replaced buttons.
+  applyMode(st.mode);
   const sig = JSON.stringify([
+    st.mode,
+    st.base?.songs,
+    st.playlist.length,
     st.endedAt,
     st.candidates.map((c) => [c.song.id, c.votes]),
     [...mine],
@@ -84,6 +130,9 @@ function renderLists() {
 
   votesLeft.textContent = `${mine.size} / ${session.cfg.maxVotes} votes`;
   emptyEl.hidden = st.candidates.length > 0;
+  emptyEl.textContent = baseMode
+    ? "No votes yet. Pick songs from the playlist below to move them up."
+    : "No songs yet. Search above to propose one.";
   candidateList.innerHTML = st.candidates
     .map(
       (c) => `
@@ -116,19 +165,58 @@ function renderLists() {
     )
     .join("");
 
+  if (baseMode) results = baseResults(q.value.trim());
   renderResults();
 }
 
 function renderResults() {
-  resultsSec.hidden = results.length === 0;
-  if (!session || results.length === 0) return;
-  const st = session.state();
+  const st = session?.state();
+  const played = playedIds();
+  const term = q.value.trim();
+  // Keep each song's index into `results`, so taps still find the right song.
+  const visible = results.map((s, i) => [s, i] as const).filter(([s]) => !(hidePlayed && played.has(s.id)));
+
+  // How many songs the filter hides (or would hide), for its label.
+  const pool = baseMode ? baseMatches(term) : results;
+  const playedCount = pool.filter((s) => played.has(s.id)).length;
+  $("hide-played-label").textContent = playedCount ? `Hide played (${playedCount})` : "Hide played";
+  $<HTMLInputElement>("hide-played").checked = hidePlayed;
+
+  let hintText = "";
+  if (baseMode && st) {
+    // The playlist is always listed in base mode, even without a search term.
+    resultsSec.hidden = false;
+    const base = st.base;
+    const available = hidePlayed ? pool.length - playedCount : pool.length;
+    $("results-title").textContent = base ? `Playlist · ${base.name}` : "Playlist";
+    hintText = !base
+      ? "The host hasn't picked a playlist yet."
+      : pool.length === 0
+        ? "No song in the playlist matches that."
+        : visible.length === 0
+          ? "Every matching song has played. Turn off “Hide played” to see them."
+          : available > visible.length
+            ? `Showing ${visible.length} of ${available}. Search to find the rest.`
+            : "";
+  } else {
+    resultsSec.hidden = results.length === 0;
+    $("results-title").textContent = "Results";
+    if (results.length && visible.length === 0) hintText = "Every result has played. Turn off “Hide played” to see them.";
+  }
+  $("results-hint").hidden = !hintText;
+  $("results-hint").textContent = hintText;
+
+  if (!session || !st || visible.length === 0) {
+    resultList.innerHTML = "";
+    return;
+  }
   const pooled = new Set(st.candidates.map((c) => c.song.id));
   const mine = votesOf(st, session.id);
-  resultList.innerHTML = results
-    .map((s, i) => {
+  resultList.innerHTML = visible
+    .map(([s, i]) => {
       const cls = mine.has(s.id) ? "on" : pooled.has(s.id) ? "added" : "";
       const icon = mine.has(s.id) ? "♥" : "+";
+      const tag = played.has(s.id) ? `<span class="tag">played</span>` : "";
       return `
       <li class="song" data-index="${i}">
         ${thumb(s)}
@@ -136,6 +224,7 @@ function renderResults() {
           <div class="title">${escapeHtml(s.title)}</div>
           <div class="artist">${escapeHtml(s.artist)}${s.album ? ` · ${escapeHtml(s.album)}` : ""} · ${fmtTime(s.durationS * 1000)}</div>
         </div>
+        ${tag}
         <button class="vote-btn ${cls}" data-action="propose" aria-label="Propose and vote">${icon}</button>
       </li>`;
     })
@@ -188,6 +277,12 @@ let debounce: ReturnType<typeof setTimeout> | undefined;
 
 async function runSearch(term: string) {
   const seq = ++searchSeq;
+  if (baseMode) {
+    // Base-only mode: filter the playlist locally, never search YouTube.
+    results = baseResults(term);
+    renderResults();
+    return;
+  }
   if (!term) {
     results = [];
     renderResults();
@@ -210,6 +305,13 @@ q.addEventListener("input", () => {
   clearTimeout(debounce);
   debounce = setTimeout(() => runSearch(q.value.trim()), 350);
 });
+$("hide-played").addEventListener("change", (e) => {
+  hidePlayed = (e.target as HTMLInputElement).checked;
+  localStorage.setItem(HIDE_PLAYED_KEY, hidePlayed ? "1" : "");
+  if (baseMode) results = baseResults(q.value.trim());
+  renderResults();
+});
+
 $("search-form").addEventListener("submit", (e) => {
   e.preventDefault();
   clearTimeout(debounce);

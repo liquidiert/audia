@@ -188,7 +188,8 @@ describe("base playlist", () => {
   test("fills silence with base songs, back to back, without repeats", () => {
     // Songs are 5s, rounds 1s: a base song is queued whenever the queue would run dry.
     const s = derive(baseSet(0, ids), c, 30_500);
-    expect(s.base).toEqual({ name: "Wedding classics", songs: 5 });
+    expect(s.base).toMatchObject({ name: "Wedding classics", songs: 5 });
+    expect(s.base?.list.map((x) => x.id)).toEqual(ids);
     expect(s.playlist.every((p) => p.source === "base" && p.votes === 0)).toBe(true);
     for (let j = 1; j < s.playlist.length; j++) expect(s.playlist[j]!.startAt).toBe(s.playlist[j - 1]!.endAt);
     const firstFive = s.playlist.slice(0, 5).map((p) => p.song.id);
@@ -266,6 +267,41 @@ describe("base playlist", () => {
     expect(derive([...baseSet(0, ids), order(0, "ordered", "guest")], c, 1500).baseOrder).toBe("shuffle");
   });
 
+  const mode = (ts: number, m: "open" | "base", by = "host"): AppEvent => ({
+    k: "mode", id: `e${n++}`, by, ts, sig: "", mode: m,
+  });
+
+  test("open mode is the default", () => {
+    expect(derive(baseSet(0, ids), c, 500).mode).toBe("open");
+  });
+
+  test("base mode ignores new songs but lets guests vote base songs up the order", () => {
+    const ev = [
+      ...baseSet(0, ids), order(0, "ordered"), mode(0, "base"),
+      propose("outsider", 10), vote("outsider", "u1", 11), vote("outsider", "u2", 12), // not in the base playlist
+      propose("b4", 20), vote("b4", "u3", 21), // guest wants b4 first
+    ];
+    const s = derive(ev, c, 1200);
+    expect(s.mode).toBe("base");
+    // b4 jumps the playlist order (b1 would be next), the outsider never counts.
+    expect(s.playlist.map((p) => [p.song.id, p.source])).toEqual([["b4", "vote"]]);
+    const later = derive(ev, c, 20_500);
+    expect(later.playlist.map((p) => p.song.id)).not.toContain("outsider");
+    expect(later.playlist[1]).toMatchObject({ source: "base", song: { id: "b1" } });
+  });
+
+  test("candidates from open mode are hidden in base mode and come back when it's switched off", () => {
+    const ev = [...baseSet(0, ids), propose("outsider", 10), vote("outsider", "u", 11), mode(20, "base")];
+    expect(derive(ev, c, 500).candidates.map((x) => x.song.id)).toEqual([]);
+    expect(derive(ev, c, 1200).playlist.map((p) => p.song.id)).not.toContain("outsider");
+    const back = derive([...ev, mode(1500, "open")], c, 2200);
+    expect(back.playlist.map((p) => p.song.id)).toContain("outsider");
+  });
+
+  test("only the host can change the mode", () => {
+    expect(derive([...baseSet(0, ids), mode(0, "base", "guest")], c, 500).mode).toBe("open");
+  });
+
   test("keepers after the party include played base songs but not unplayed ones", () => {
     const s = derive(baseSet(0, ids), c, 12_500);
     const played = keepers(s.playlist, 12_500).map((x) => x.id);
@@ -319,6 +355,8 @@ describe("protocol", () => {
     expect(validEvent({ ...base, part: 1 }, 0)).toBe(false);
     expect(validEvent({ k: "base-order", id: "1", by: "h", ts: 0, sig: "00", order: "ordered" }, 0)).toBe(true);
     expect(validEvent({ k: "base-order", id: "1", by: "h", ts: 0, sig: "00", order: "random" }, 0)).toBe(false);
+    expect(validEvent({ k: "mode", id: "1", by: "h", ts: 0, sig: "00", mode: "base" }, 0)).toBe(true);
+    expect(validEvent({ k: "mode", id: "1", by: "h", ts: 0, sig: "00", mode: "closed" }, 0)).toBe(false);
     expect(validEvent({ ...base, songs: Array.from({ length: 41 }, (_, i) => song(`s${i}`)) }, 0)).toBe(false);
   });
 });

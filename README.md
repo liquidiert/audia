@@ -35,7 +35,7 @@ Press **P**, or click the arrow in the top-right corner, to hide or show the dis
 Only the browser that started a session can end it, because its iroh key signs the end event.
 
 Session parameters are query params on a new session:
-`/display?new&name=Party&round=90&votes=3&queue=3&skip=5`
+`/display?new&name=Party&round=90&votes=3&queue=3&skip=5&mode=base`
 
 | param   | default | meaning                                                             |
 | ------- | ------- | ------------------------------------------------------------------- |
@@ -43,6 +43,7 @@ Session parameters are query params on a new session:
 | `votes` | 3       | Votes per person that count at once. A newer vote pushes out the oldest. |
 | `queue` | 3       | Rounds pause, and votes keep rolling, while this many songs are queued or playing. |
 | `skip`  | 5       | Skip votes from different people that end the current song early. |
+| `mode`  | open    | `base`: guests can only vote songs of the base playlist, not add new ones. |
 
 Env:
 
@@ -76,6 +77,12 @@ Public and unlisted playlists work; auto-generated charts and radio mixes can't 
   agrees on, because it's seeded by session and round, and avoids repeats until the whole list
   has had its turn. *Playlist order* plays the song after the last base song and wraps around
   at the end.
+- **Guests can** (in the same dialog, or `/display?new&mode=base` for a new session):
+  *Add any song* (default), or *Only vote this playlist*. In the second mode, guests can't add
+  new songs: the phone's search box filters the base playlist instead of YouTube Music, and
+  voting a song moves it ahead of the playlist's normal order. The reducer enforces this, so
+  proposals of other songs are ignored, and candidates from open mode stay hidden until the
+  mode is switched back.
 - Base songs show an "auto" tag. Only the display that started the session can set or remove
   the base playlist, which holds up to 400 songs.
 - The saved playlist and the phones' "Played tonight" list contain only songs that actually
@@ -132,7 +139,7 @@ The crate also exposes ed25519 `sign` and `verify`, so every event is signed wit
 endpoint key and nobody can vote under someone else's id.
 
 **Replicated event log** (`src/client/session.ts`): peers exchange signed `propose`, `vote`,
-`skip`, `base` and `end` events. When a neighbour comes up, each side sends its full log in chunks, so late joiners and
+`skip`, `base`, `base-order`, `mode` and `end` events. When a neighbour comes up, each side sends its full log in chunks, so late joiners and
 reloaded phones catch up. The log is also kept in `localStorage`. The Bun host keeps a
 directory of recently seen peers (`/api/session`), and a peer with no neighbours keeps
 re-dialling fresh ones.

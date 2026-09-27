@@ -1,6 +1,7 @@
 import type {
   AppEvent,
   BaseOrder,
+  SessionMode,
   Candidate,
   DerivedState,
   PlaylistEntry,
@@ -40,6 +41,9 @@ export const DEFAULT_SKIP_VOTES = 5;
  *   seeded by session and round, so every peer picks the same one, and songs
  *   that already played are avoided until the whole list has had its turn. With
  *   "ordered" the song after the last base song plays, wrapping at the end.
+ * - Mode (host only): in "base" mode guests can only vote on base playlist songs.
+ *   Proposals of other songs are ignored and only base songs can win a round;
+ *   candidates from "open" mode stay in the pool (hidden) should it switch back.
  */
 export function derive(
   events: Iterable<AppEvent>,
@@ -62,6 +66,9 @@ export function derive(
   // Declared via `as` so TypeScript doesn't narrow it to `null` (it's assigned inside closures).
   let base = null as { name: string; songs: Song[] } | null;
   let baseOrder: BaseOrder = "shuffle";
+  let baseIds = new Set<string>();
+  let mode: SessionMode = "open";
+  const eligible = (songId: string) => mode !== "base" || baseIds.has(songId);
 
   const addBasePart = (e: Extract<AppEvent, { k: "base" }>) => {
     if (!cfg.host || e.by !== cfg.host) return;
@@ -73,6 +80,7 @@ export function derive(
     const ordered = [...parts.values()].sort((a, b) => a.part - b.part);
     const songs = ordered.flatMap((p) => p.songs);
     base = songs.length ? { name: ordered[0]!.name, songs } : null;
+    baseIds = new Set(songs.map((s) => s.id));
   };
 
   const pickBase = (r: number): Song | null => {
@@ -118,9 +126,12 @@ export function derive(
       addBasePart(e);
     } else if (e.k === "base-order") {
       if (cfg.host && e.by === cfg.host) baseOrder = e.order;
+    } else if (e.k === "mode") {
+      if (cfg.host && e.by === cfg.host) mode = e.mode;
     } else if (e.k === "skip") {
       skip(e);
     } else if (e.k === "propose") {
+      if (!eligible(e.song.id)) return;
       if (!pool.has(e.song.id) && e.ts >= (wonAt.get(e.song.id) ?? -Infinity)) {
         pool.set(e.song.id, { song: e.song, proposedAt: e.ts, proposedBy: e.by });
       }
@@ -148,6 +159,7 @@ export function derive(
       }
     }
     return [...pool.entries()]
+      .filter(([songId]) => eligible(songId))
       .map(([songId, p]) => {
         const voters = counts.get(songId) ?? [];
         return { ...p, votes: voters.length, voters };
@@ -235,7 +247,8 @@ export function derive(
     playlist,
     nowPlaying: current ? { entry: current, positionMs: now - current.startAt } : null,
     endedAt: endedAt !== null && endedAt <= now ? endedAt : null,
-    base: base ? { name: base.name, songs: base.songs.length } : null,
+    base: base ? { name: base.name, songs: base.songs.length, list: base.songs } : null,
+    mode,
     baseOrder,
   };
 }

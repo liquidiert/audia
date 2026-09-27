@@ -15,7 +15,7 @@ import {
 } from "./youtube";
 import { keepers } from "../shared/state";
 import { newSessionConfig, type Ticket } from "../shared/protocol";
-import type { BaseOrder, PlaylistEntry, Song } from "../shared/types";
+import type { BaseOrder, PlaylistEntry, SessionMode, Song } from "../shared/types";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -123,11 +123,16 @@ function renderState() {
   $("empty").hidden = ended || st.candidates.length > 0;
 
   const upcoming = st.playlist.filter((p) => p.startAt > now);
-  $("next-empty").textContent = st.base
-    ? `The winner of this round plays next. No votes? Something from “${st.base.name}” plays.`
-    : "The winner of this round plays next.";
+  $("next-empty").textContent =
+    st.mode === "base"
+      ? st.base
+        ? `Guests vote songs from “${st.base.name}” up the order. No votes? The playlist plays on.`
+        : "Guests can only vote the base playlist, but none is set yet."
+      : st.base
+        ? `The winner of this round plays next. No votes? Something from “${st.base.name}” plays.`
+        : "The winner of this round plays next.";
   const history = st.playlist.filter((p) => p.endAt <= now).reverse().slice(0, 8);
-  const sig = JSON.stringify([upcoming.map((p) => p.startAt), history.map((p) => p.endAt), st.base?.name]);
+  const sig = JSON.stringify([upcoming.map((p) => p.startAt), history.map((p) => p.endAt), st.base?.name, st.mode]);
   if (sig !== lastQueueSig) {
     lastQueueSig = sig;
     const auto = (p: PlaylistEntry) => (p.source === "base" ? `<span class="tag" title="From the base playlist">auto</span>` : "");
@@ -317,7 +322,11 @@ function renderBaseDialog() {
   for (const input of document.querySelectorAll<HTMLInputElement>('input[name="base-order"]')) {
     input.checked = input.value === st.baseOrder;
   }
+  for (const input of document.querySelectorAll<HTMLInputElement>('input[name="guest-mode"]')) {
+    input.checked = input.value === st.mode;
+  }
   $<HTMLFieldSetElement>("base-order").disabled = !session.isHost;
+  $<HTMLFieldSetElement>("guest-mode").disabled = !session.isHost;
   $("base-current").innerHTML = current
     ? `Now: <b>${escapeHtml(current.name)}</b> · ${current.songs} songs · ${st.baseOrder === "ordered" ? "in playlist order" : "shuffled"}`
     : "No base playlist yet. Silence when nobody votes.";
@@ -378,6 +387,23 @@ baseGo.addEventListener("click", async () => {
   } finally {
     baseGo.disabled = false;
   }
+});
+
+$("guest-mode").addEventListener("change", async (e) => {
+  const mode = (e.target as HTMLInputElement).value as SessionMode;
+  try {
+    await session.setMode(mode);
+    baseStatus(
+      mode === "base"
+        ? session.state().base
+          ? "Guests can now only vote songs from the base playlist up the order."
+          : "Guests can only vote the base playlist, so load one for them to vote on."
+        : "Guests can add any song again.",
+    );
+  } catch (err) {
+    baseStatus((err as Error).message, true);
+  }
+  renderBaseDialog();
 });
 
 $("base-order").addEventListener("change", async (e) => {
@@ -478,6 +504,8 @@ if (!session.isHost) {
 $("session-name").textContent = session.cfg.name;
 if (fresh) {
   await publish();
+  // `/display?new&mode=base`: guests may only vote the base playlist from the start.
+  if (new URLSearchParams(location.search).get("mode") === "base") await session.setMode("base");
   history.replaceState(null, "", "/display");
 }
 session.subscribe(() => {

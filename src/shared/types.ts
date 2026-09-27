@@ -81,12 +81,24 @@ export interface BaseOrderEvent extends EventBase {
   order: BaseOrder;
 }
 
+/**
+ * What guests may do: "open" lets them add any song; "base" limits them to voting
+ * songs of the base playlist up the order (no new songs).
+ */
+export type SessionMode = "open" | "base";
+
+/** Host setting: the session mode. Latest one wins. */
+export interface ModeEvent extends EventBase {
+  k: "mode";
+  mode: SessionMode;
+}
+
 /** The host ends the session: nothing after `ts` counts, the music stops. */
 export interface EndEvent extends EventBase {
   k: "end";
 }
 
-export type AppEvent = ProposeEvent | VoteEvent | SkipEvent | BaseEvent | BaseOrderEvent | EndEvent;
+export type AppEvent = ProposeEvent | VoteEvent | SkipEvent | BaseEvent | BaseOrderEvent | ModeEvent | EndEvent;
 
 /** Messages on the gossip wire (JSON, utf-8). */
 export type WireMessage =
@@ -127,7 +139,9 @@ export interface DerivedState {
   /** When the host ended the session, if it has. */
   endedAt: number | null;
   /** The base playlist currently in effect, if any. */
-  base: { name: string; songs: number } | null;
+  base: { name: string; songs: number; list: Song[] } | null;
+  /** Whether guests may add any song or only vote base playlist songs. */
+  mode: SessionMode;
   /** How base songs are picked (applies once a base playlist is set). */
   baseOrder: BaseOrder;
 }
