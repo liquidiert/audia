@@ -90,6 +90,10 @@
           <label><input type="radio" name="guest-mode" value="open" /> Add any song</label>
           <label><input type="radio" name="guest-mode" value="base" /> Only vote this playlist</label>
         </fieldset>
+        <label class="inline-number" id="min-votes-row">
+          <span>Votes needed to move a song up</span>
+          <input id="min-votes" type="number" min="1" max="100" step="1" inputmode="numeric" />
+        </label>
         <fieldset class="segmented" id="base-order">
           <legend>Song order</legend>
           <label><input type="radio" name="base-order" value="shuffle" /> Shuffle</label>

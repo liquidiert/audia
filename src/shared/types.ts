@@ -91,6 +91,11 @@ export type SessionMode = "open" | "base";
 export interface ModeEvent extends EventBase {
   k: "mode";
   mode: SessionMode;
+  /**
+   * Base mode only: votes a song needs before it can jump the playlist order.
+   * Missing on older events, which means the default.
+   */
+  minVotes?: number;
 }
 
 /** The host ends the session: nothing after `ts` counts, the music stops. */
@@ -142,6 +147,8 @@ export interface DerivedState {
   base: { name: string; songs: number; list: Song[] } | null;
   /** Whether guests may add any song or only vote base playlist songs. */
   mode: SessionMode;
+  /** Base mode: votes a song needs to jump the playlist order. */
+  minVotes: number;
   /** How base songs are picked (applies once a base playlist is set). */
   baseOrder: BaseOrder;
 }

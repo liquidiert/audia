@@ -19,6 +19,10 @@ export function randomId(bytes = 12): string {
 export const heartbeatMessage = (topic: string, id: string, relay: string, ts: number) =>
   `audia-heartbeat|${topic}|${id}|${relay}|${ts}`;
 
+/** Base mode: default and upper bound for the votes a song needs to jump the order. */
+export const DEFAULT_MIN_VOTES = 5;
+export const MAX_MIN_VOTES = 100;
+
 /** Songs per `base` event; keeps each event around 10 KB, well inside a gossip frame. */
 export const BASE_PART_SIZE = 40;
 /** Largest base playlist accepted (parts × part size). */
@@ -40,7 +44,8 @@ export function signingBytes(e: AppEvent): Uint8Array {
             : e.k === "base-order"
               ? [e.k, e.id, e.by, e.ts, e.order]
               : e.k === "mode"
-                ? [e.k, e.id, e.by, e.ts, e.mode]
+                ? // `minVotes` joined later; events without it keep their original signed form.
+                  e.minVotes === undefined ? [e.k, e.id, e.by, e.ts, e.mode] : [e.k, e.id, e.by, e.ts, e.mode, e.minVotes]
                 : [e.k, e.id, e.by, e.ts];
   return enc.encode(JSON.stringify(body));
 }
@@ -71,7 +76,10 @@ export function validEvent(e: unknown, now: number): e is AppEvent {
   if (x.k === "skip") return str(x.songId, 32) && Number.isInteger(x.round) && x.round >= 0;
   if (x.k === "end") return true;
   if (x.k === "base-order") return x.order === "shuffle" || x.order === "ordered";
-  if (x.k === "mode") return x.mode === "open" || x.mode === "base";
+  if (x.k === "mode") {
+    const okVotes = x.minVotes === undefined || (Number.isInteger(x.minVotes) && x.minVotes >= 1 && x.minVotes <= MAX_MIN_VOTES);
+    return (x.mode === "open" || x.mode === "base") && okVotes;
+  }
   if (x.k === "base") {
     return (
       str(x.set, 64) &&

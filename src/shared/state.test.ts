@@ -267,8 +267,8 @@ describe("base playlist", () => {
     expect(derive([...baseSet(0, ids), order(0, "ordered", "guest")], c, 1500).baseOrder).toBe("shuffle");
   });
 
-  const mode = (ts: number, m: "open" | "base", by = "host"): AppEvent => ({
-    k: "mode", id: `e${n++}`, by, ts, sig: "", mode: m,
+  const mode = (ts: number, m: "open" | "base", by = "host", minVotes?: number): AppEvent => ({
+    k: "mode", id: `e${n++}`, by, ts, sig: "", mode: m, ...(minVotes === undefined ? {} : { minVotes }),
   });
 
   test("open mode is the default", () => {
@@ -277,7 +277,7 @@ describe("base playlist", () => {
 
   test("base mode ignores new songs but lets guests vote base songs up the order", () => {
     const ev = [
-      ...baseSet(0, ids), order(0, "ordered"), mode(0, "base"),
+      ...baseSet(0, ids), order(0, "ordered"), mode(0, "base", "host", 1), // one vote is enough here
       propose("outsider", 10), vote("outsider", "u1", 11), vote("outsider", "u2", 12), // not in the base playlist
       propose("b4", 20), vote("b4", "u3", 21), // guest wants b4 first
     ];
@@ -296,6 +296,35 @@ describe("base playlist", () => {
     expect(derive(ev, c, 1200).playlist.map((p) => p.song.id)).not.toContain("outsider");
     const back = derive([...ev, mode(1500, "open")], c, 2200);
     expect(back.playlist.map((p) => p.song.id)).toContain("outsider");
+  });
+
+  const voters = (songId: string, count: number, ts: number) =>
+    Array.from({ length: count }, (_, i) => vote(songId, `v${i}`, ts + i));
+
+  test("base mode needs 5 votes by default before a song jumps the order", () => {
+    const base = [...baseSet(0, ids), order(0, "ordered"), mode(0, "base"), propose("b4", 10)];
+    const four = derive([...base, ...voters("b4", 4, 20)], c, 1200);
+    expect(four.minVotes).toBe(5);
+    expect(four.playlist.map((p) => [p.song.id, p.source])).toEqual([["b1", "base"]]); // order continues
+    expect(four.candidates.find((x) => x.song.id === "b4")?.votes).toBe(4); // votes keep rolling over
+    const five = derive([...base, ...voters("b4", 5, 20)], c, 1200);
+    expect(five.playlist.map((p) => [p.song.id, p.source])).toEqual([["b4", "vote"]]);
+  });
+
+  test("the threshold is configurable and only applies in base mode", () => {
+    const withTwo = [...baseSet(0, ids), order(0, "ordered"), mode(0, "base", "host", 2), propose("b4", 10), ...voters("b4", 2, 20)];
+    expect(derive(withTwo, c, 1200).playlist[0]).toMatchObject({ song: { id: "b4" }, source: "vote" });
+    // Open mode: one vote still wins, whatever the threshold says.
+    const open = [...baseSet(0, ids), mode(0, "open", "host", 10), propose("x", 10), vote("x", "u", 20)];
+    expect(derive(open, c, 1200).playlist[0]).toMatchObject({ song: { id: "x" }, source: "vote" });
+  });
+
+  test("a song the base playlist plays loses the votes it had", () => {
+    // b1 has 2 votes (below 5) when the ordered playlist reaches it anyway.
+    const ev = [...baseSet(0, ids), order(0, "ordered"), mode(0, "base"), propose("b1", 10), ...voters("b1", 2, 20)];
+    const s = derive(ev, c, 1200);
+    expect(s.playlist[0]).toMatchObject({ song: { id: "b1" }, source: "base" });
+    expect(s.candidates.map((x) => x.song.id)).not.toContain("b1");
   });
 
   test("only the host can change the mode", () => {
@@ -357,6 +386,10 @@ describe("protocol", () => {
     expect(validEvent({ k: "base-order", id: "1", by: "h", ts: 0, sig: "00", order: "random" }, 0)).toBe(false);
     expect(validEvent({ k: "mode", id: "1", by: "h", ts: 0, sig: "00", mode: "base" }, 0)).toBe(true);
     expect(validEvent({ k: "mode", id: "1", by: "h", ts: 0, sig: "00", mode: "closed" }, 0)).toBe(false);
+    expect(validEvent({ k: "mode", id: "1", by: "h", ts: 0, sig: "00", mode: "base", minVotes: 3 }, 0)).toBe(true);
+    for (const minVotes of [0, 2.5, 101, "5"]) {
+      expect(validEvent({ k: "mode", id: "1", by: "h", ts: 0, sig: "00", mode: "base", minVotes }, 0)).toBe(false);
+    }
     expect(validEvent({ ...base, songs: Array.from({ length: 41 }, (_, i) => song(`s${i}`)) }, 0)).toBe(false);
   });
 });

@@ -103,6 +103,9 @@ body.side-collapsed .side-toggle svg { transform: rotate(180deg); }
 .base-current { margin: 0; font-size: 14px; padding: 10px 12px; border-radius: 12px; background: #ffffff08; }
 .base-current b { color: var(--text); }
 .save-actions button.danger-text { color: #ff8a8a; }
+.save-dialog label.inline-number { flex-direction: row; align-items: center; justify-content: space-between; gap: 12px; }
+.save-dialog label.inline-number input { width: 84px; text-align: center; }
+.save-dialog label.inline-number.off { opacity: 0.5; }
 .segmented { border: 0; margin: 0; padding: 0; display: flex; gap: 0; }
 .segmented legend { font-size: 13px; color: var(--muted); padding: 0; margin-bottom: 6px; float: left; width: 100%; }
 .segmented label {

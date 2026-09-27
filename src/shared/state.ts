@@ -8,6 +8,7 @@ import type {
   SessionConfig,
   Song,
 } from "./types";
+import { DEFAULT_MIN_VOTES } from "./protocol";
 
 export const DEFAULT_SKIP_VOTES = 5;
 
@@ -44,6 +45,10 @@ export const DEFAULT_SKIP_VOTES = 5;
  * - Mode (host only): in "base" mode guests can only vote on base playlist songs.
  *   Proposals of other songs are ignored and only base songs can win a round;
  *   candidates from "open" mode stay in the pool (hidden) should it switch back.
+ *   A song also needs `minVotes` votes (default 5) before it can jump the order;
+ *   below that, votes keep rolling over and the base playlist plays on.
+ * - When the base playlist plays a song that also had votes, those votes are used
+ *   up, just as if it had won.
  */
 export function derive(
   events: Iterable<AppEvent>,
@@ -67,7 +72,8 @@ export function derive(
   let base = null as { name: string; songs: Song[] } | null;
   let baseOrder: BaseOrder = "shuffle";
   let baseIds = new Set<string>();
-  let mode: SessionMode = "open";
+  let mode = "open" as SessionMode; // `as`: assigned inside closures, so don't let TS narrow it
+  let minVotes = DEFAULT_MIN_VOTES;
   const eligible = (songId: string) => mode !== "base" || baseIds.has(songId);
 
   const addBasePart = (e: Extract<AppEvent, { k: "base" }>) => {
@@ -127,7 +133,10 @@ export function derive(
     } else if (e.k === "base-order") {
       if (cfg.host && e.by === cfg.host) baseOrder = e.order;
     } else if (e.k === "mode") {
-      if (cfg.host && e.by === cfg.host) mode = e.mode;
+      if (cfg.host && e.by === cfg.host) {
+        mode = e.mode;
+        minVotes = e.minVotes ?? DEFAULT_MIN_VOTES;
+      }
     } else if (e.k === "skip") {
       skip(e);
     } else if (e.k === "propose") {
@@ -199,14 +208,19 @@ export function derive(
 
     if (queuedAt(boundary) < cfg.maxQueue) {
       const winner = tally()[0];
-      if (winner && winner.votes > 0) {
+      const needed = mode === "base" ? minVotes : 1;
+      if (winner && winner.votes >= needed) {
         queue(winner.song, winner.votes, "vote");
         pool.delete(winner.song.id);
         wonAt.set(winner.song.id, boundary);
       } else if ((playlist.at(-1)?.endAt ?? 0) < roundEnd(r + 1)) {
         // Nobody voted and the music would stop before the next round closes.
         const fill = pickBase(r);
-        if (fill) queue(fill, 0, "base");
+        if (fill) {
+          queue(fill, 0, "base");
+          // It's playing now, so votes it collected are used up (as if it had won).
+          if (pool.delete(fill.id)) wonAt.set(fill.id, boundary);
+        }
       }
     }
 
@@ -249,6 +263,7 @@ export function derive(
     endedAt: endedAt !== null && endedAt <= now ? endedAt : null,
     base: base ? { name: base.name, songs: base.songs.length, list: base.songs } : null,
     mode,
+    minVotes,
     baseOrder,
   };
 }

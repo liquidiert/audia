@@ -9,12 +9,19 @@ import { isIP } from "node:net";
  * so it can be tightened and enforced once real traffic shows it's complete.
  */
 const CSP_ENFORCED = "frame-ancestors 'none'; object-src 'none'; base-uri 'none'; form-action 'self'";
+/**
+ * iroh relays. Its default relay map uses fully-qualified hostnames with a trailing
+ * dot (`euc1-1.relay.n0.iroh.link.`), which `*.iroh.link` doesn't match, so both forms
+ * are listed: https for the relay pings, wss for the relay connection itself.
+ */
+const IROH_RELAYS = ["https://*.iroh.link", "https://*.iroh.link.", "wss://*.iroh.link", "wss://*.iroh.link."].join(" ");
+
 const CSP_REPORT_ONLY = [
   "default-src 'self'",
   "script-src 'self' 'wasm-unsafe-eval' https://www.youtube.com https://s.ytimg.com https://accounts.google.com",
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: https:",
-  "connect-src 'self' https://*.iroh.link wss://*.iroh.link https://www.googleapis.com https://accounts.google.com",
+  `connect-src 'self' ${IROH_RELAYS} https://www.googleapis.com https://accounts.google.com`,
   "frame-src https://www.youtube.com https://www.youtube-nocookie.com https://accounts.google.com",
   "worker-src 'self' blob:",
   "report-uri /api/csp-report",

@@ -14,7 +14,7 @@ import {
   type Privacy,
 } from "./youtube";
 import { keepers } from "../shared/state";
-import { newSessionConfig, type Ticket } from "../shared/protocol";
+import { MAX_MIN_VOTES, newSessionConfig, type Ticket } from "../shared/protocol";
 import type { BaseOrder, PlaylistEntry, SessionMode, Song } from "../shared/types";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -126,13 +126,13 @@ function renderState() {
   $("next-empty").textContent =
     st.mode === "base"
       ? st.base
-        ? `Guests vote songs from “${st.base.name}” up the order. No votes? The playlist plays on.`
+        ? `Guests vote songs from “${st.base.name}” up the order (${st.minVotes} vote${st.minVotes === 1 ? "" : "s"} to jump ahead). Otherwise the playlist plays on.`
         : "Guests can only vote the base playlist, but none is set yet."
       : st.base
         ? `The winner of this round plays next. No votes? Something from “${st.base.name}” plays.`
         : "The winner of this round plays next.";
   const history = st.playlist.filter((p) => p.endAt <= now).reverse().slice(0, 8);
-  const sig = JSON.stringify([upcoming.map((p) => p.startAt), history.map((p) => p.endAt), st.base?.name, st.mode]);
+  const sig = JSON.stringify([upcoming.map((p) => p.startAt), history.map((p) => p.endAt), st.base?.name, st.mode, st.minVotes]);
   if (sig !== lastQueueSig) {
     lastQueueSig = sig;
     const auto = (p: PlaylistEntry) => (p.source === "base" ? `<span class="tag" title="From the base playlist">auto</span>` : "");
@@ -327,6 +327,11 @@ function renderBaseDialog() {
   }
   $<HTMLFieldSetElement>("base-order").disabled = !session.isHost;
   $<HTMLFieldSetElement>("guest-mode").disabled = !session.isHost;
+  // The threshold only matters when guests can only vote the playlist.
+  const minVotes = $<HTMLInputElement>("min-votes");
+  if (document.activeElement !== minVotes) minVotes.value = String(st.minVotes);
+  minVotes.disabled = !session.isHost || st.mode !== "base";
+  $("min-votes-row").classList.toggle("off", st.mode !== "base");
   $("base-current").innerHTML = current
     ? `Now: <b>${escapeHtml(current.name)}</b> · ${current.songs} songs · ${st.baseOrder === "ordered" ? "in playlist order" : "shuffled"}`
     : "No base playlist yet. Silence when nobody votes.";
@@ -400,6 +405,23 @@ $("guest-mode").addEventListener("change", async (e) => {
           : "Guests can only vote the base playlist, so load one for them to vote on."
         : "Guests can add any song again.",
     );
+  } catch (err) {
+    baseStatus((err as Error).message, true);
+  }
+  renderBaseDialog();
+});
+
+$("min-votes").addEventListener("change", async (e) => {
+  const input = e.target as HTMLInputElement;
+  const value = Math.round(Number(input.value));
+  if (!Number.isFinite(value) || value < 1 || value > MAX_MIN_VOTES) {
+    baseStatus(`Pick a number from 1 to ${MAX_MIN_VOTES}.`, true);
+    input.value = String(session.state().minVotes);
+    return;
+  }
+  try {
+    await session.setMode(session.state().mode, value);
+    baseStatus(`A song now needs ${value} vote${value === 1 ? "" : "s"} to move up the playlist.`);
   } catch (err) {
     baseStatus((err as Error).message, true);
   }
@@ -504,8 +526,12 @@ if (!session.isHost) {
 $("session-name").textContent = session.cfg.name;
 if (fresh) {
   await publish();
-  // `/display?new&mode=base`: guests may only vote the base playlist from the start.
-  if (new URLSearchParams(location.search).get("mode") === "base") await session.setMode("base");
+  // `/display?new&mode=base&minvotes=3`: guests may only vote the base playlist from the start.
+  const params = new URLSearchParams(location.search);
+  if (params.get("mode") === "base") {
+    const n = Math.round(Number(params.get("minvotes")));
+    await session.setMode("base", Number.isFinite(n) && n >= 1 && n <= MAX_MIN_VOTES ? n : undefined);
+  }
   history.replaceState(null, "", "/display");
 }
 session.subscribe(() => {

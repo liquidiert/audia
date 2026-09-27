@@ -44,6 +44,7 @@ Session parameters are query params on a new session:
 | `queue` | 3       | Rounds pause, and votes keep rolling, while this many songs are queued or playing. |
 | `skip`  | 5       | Skip votes from different people that end the current song early. |
 | `mode`  | open    | `base`: guests can only vote songs of the base playlist, not add new ones. |
+| `minvotes` | 5    | With `mode=base`: votes a song needs before it can jump the playlist order. |
 
 Env:
 
@@ -80,7 +81,10 @@ Public and unlisted playlists work; auto-generated charts and radio mixes can't 
 - **Guests can** (in the same dialog, or `/display?new&mode=base` for a new session):
   *Add any song* (default), or *Only vote this playlist*. In the second mode, guests can't add
   new songs: the phone's search box filters the base playlist instead of YouTube Music, and
-  voting a song moves it ahead of the playlist's normal order. The reducer enforces this, so
+  voting a song moves it ahead of the playlist's normal order, once it has enough votes:
+  **Votes needed to move a song up** (default 5, same dialog, or `&minvotes=` on a new
+  session). Below that, votes carry over between rounds and the playlist plays on. If the
+  playlist reaches a song on its own, the votes it had are used up. The reducer enforces this, so
   proposals of other songs are ignored, and candidates from open mode stay hidden until the
   mode is switched back.
 - Base songs show an "auto" tag. Only the display that started the session can set or remove

@@ -95,6 +95,7 @@ function renderLists() {
   applyMode(st.mode);
   const sig = JSON.stringify([
     st.mode,
+    st.minVotes,
     st.base?.songs,
     st.playlist.length,
     st.endedAt,
@@ -130,6 +131,9 @@ function renderLists() {
 
   votesLeft.textContent = `${mine.size} / ${session.cfg.maxVotes} votes`;
   emptyEl.hidden = st.candidates.length > 0;
+  const rule = $("vote-rule");
+  rule.hidden = !baseMode;
+  rule.textContent = `A song needs ${st.minVotes} vote${st.minVotes === 1 ? "" : "s"} to jump ahead in the playlist. Votes carry over between rounds.`;
   emptyEl.textContent = baseMode
     ? "No votes yet. Pick songs from the playlist below to move them up."
     : "No songs yet. Search above to propose one.";
@@ -137,13 +141,13 @@ function renderLists() {
     .map(
       (c) => `
       <li class="song" data-id="${escapeHtml(c.song.id)}">
-        <div class="fill" style="width:${(c.votes / max) * 100}%"></div>
+        <div class="fill" style="width:${(baseMode ? Math.min(1, c.votes / st.minVotes) : c.votes / max) * 100}%"></div>
         ${thumb(c.song)}
         <div class="meta">
           <div class="title">${escapeHtml(c.song.title)}</div>
           <div class="artist">${escapeHtml(c.song.artist)} · ${fmtTime(c.song.durationS * 1000)}</div>
         </div>
-        <span class="count">${c.votes}</span>
+        <span class="count">${baseMode ? `${c.votes}/${st.minVotes}` : c.votes}</span>
         <button class="vote-btn ${mine.has(c.song.id) ? "on" : ""}" data-action="toggle" aria-label="Vote">♥</button>
       </li>`,
     )

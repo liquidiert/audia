@@ -233,10 +233,14 @@ export class Session {
     }
   }
 
-  /** Let guests add any song, or only vote base playlist songs (host only). */
-  async setMode(mode: SessionMode) {
+  /**
+   * Let guests add any song, or only vote base playlist songs (host only). `minVotes`
+   * is how many votes a song needs to jump the order in base mode; it defaults to
+   * the current setting so switching modes doesn't reset it.
+   */
+  async setMode(mode: SessionMode, minVotes = this.state().minVotes) {
     if (!this.isHost) throw new Error("Only the display that started this session can change what guests can do");
-    await this.emit({ k: "mode", mode });
+    await this.emit({ k: "mode", mode, minVotes });
   }
 
   /** Shuffle or play the base playlist in its own order (host only). */

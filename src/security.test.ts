@@ -90,6 +90,17 @@ describe("misc", () => {
     expect(res.headers.get("content-type")).toBe("text/plain");
     expect(await res.text()).toBe("x");
   });
+
+  test("the CSP allows iroh relays in both hostname forms (with and without trailing dot)", () => {
+    const connect = withSecurityHeaders(new Response("x")).headers
+      .get("content-security-policy-report-only")!
+      .split("; ")
+      .find((d) => d.startsWith("connect-src "))!
+      .split(" ");
+    for (const src of ["https://*.iroh.link", "https://*.iroh.link.", "wss://*.iroh.link", "wss://*.iroh.link."]) {
+      expect(connect).toContain(src);
+    }
+  });
 });
 
 describe("heartbeat signatures", () => {
