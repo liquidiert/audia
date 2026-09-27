@@ -192,10 +192,10 @@ Rebuilding them needs:
 - **Requests:** writes must be same-origin JSON (CSRF protection, since browsers attach Basic
   auth credentials to cross-site requests too). Bodies are capped at 64 KB, search is
   rate-limited per client, and untrusted text is sanitised before it's logged.
-- **Headers:** `nosniff`, `X-Frame-Options: DENY`, `frame-ancestors 'none'`, a strict
-  `Referrer-Policy` and `Permissions-Policy`. A full Content-Security-Policy runs in
-  report-only mode, and violations are logged via `/api/csp-report` so it can be enforced once
-  the logs are clean.
+- **Headers:** `nosniff`, `X-Frame-Options: DENY`, a strict `Referrer-Policy` and
+  `Permissions-Policy`, plus an enforced Content-Security-Policy. It allows only our own
+  scripts, the WebAssembly module, the iroh relays, the YouTube player and Google sign-in,
+  and blocks framing. Violations are reported to `/api/csp-report` and logged.
 - **Flood limits:** each device caps events per author (600 in total, 60 a minute) and in total
   (20,000). Live broadcasts must be fresh; older events only arrive through the catch-up sync.
 

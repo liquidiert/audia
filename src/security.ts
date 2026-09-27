@@ -4,11 +4,10 @@ import { isIP } from "node:net";
 // --- Response headers ---
 
 /**
- * Enforced policy that can't break the app (framing, plugins, base/form hijacking),
- * plus a full policy in report-only mode: violations are logged via /api/csp-report
- * so it can be tightened and enforced once real traffic shows it's complete.
+ * Content-Security-Policy, enforced. It ran in report-only mode first; a real session
+ * (relay connection, YouTube playback, search and thumbnails) produced no violations.
+ * Violations are still reported to /api/csp-report and logged.
  */
-const CSP_ENFORCED = "frame-ancestors 'none'; object-src 'none'; base-uri 'none'; form-action 'self'";
 /**
  * iroh relays. Its default relay map uses fully-qualified hostnames with a trailing
  * dot (`euc1-1.relay.n0.iroh.link.`), which `*.iroh.link` doesn't match, so both forms
@@ -16,14 +15,19 @@ const CSP_ENFORCED = "frame-ancestors 'none'; object-src 'none'; base-uri 'none'
  */
 const IROH_RELAYS = ["https://*.iroh.link", "https://*.iroh.link.", "wss://*.iroh.link", "wss://*.iroh.link."].join(" ");
 
-const CSP_REPORT_ONLY = [
+const CSP = [
   "default-src 'self'",
   "script-src 'self' 'wasm-unsafe-eval' https://www.youtube.com https://s.ytimg.com https://accounts.google.com",
-  "style-src 'self' 'unsafe-inline'",
+  // Google Identity Services may add its own stylesheet.
+  "style-src 'self' 'unsafe-inline' https://accounts.google.com",
   "img-src 'self' data: https:",
   `connect-src 'self' ${IROH_RELAYS} https://www.googleapis.com https://accounts.google.com`,
   "frame-src https://www.youtube.com https://www.youtube-nocookie.com https://accounts.google.com",
   "worker-src 'self' blob:",
+  "frame-ancestors 'none'",
+  "object-src 'none'",
+  "base-uri 'none'",
+  "form-action 'self'",
   "report-uri /api/csp-report",
 ].join("; ");
 
@@ -33,8 +37,7 @@ export const SECURITY_HEADERS: Record<string, string> = {
   "referrer-policy": "same-origin",
   "permissions-policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
   "cross-origin-opener-policy": "same-origin-allow-popups",
-  "content-security-policy": CSP_ENFORCED,
-  "content-security-policy-report-only": CSP_REPORT_ONLY,
+  "content-security-policy": CSP,
 };
 
 /** Copy of `res` with the security headers added (API responses are also same-origin only). */

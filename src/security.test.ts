@@ -85,7 +85,12 @@ describe("misc", () => {
   test("security headers are added without clobbering existing ones", async () => {
     const res = withSecurityHeaders(new Response("x", { headers: { "content-type": "text/plain" } }), true);
     expect(res.headers.get("x-frame-options")).toBe("DENY");
-    expect(res.headers.get("content-security-policy")).toContain("frame-ancestors 'none'");
+    const csp = res.headers.get("content-security-policy")!;
+    for (const d of ["default-src 'self'", "frame-ancestors 'none'", "object-src 'none'", "'wasm-unsafe-eval'", "report-uri /api/csp-report"]) {
+      expect(csp).toContain(d);
+    }
+    expect(csp).not.toContain("'unsafe-eval'");
+    expect(res.headers.has("content-security-policy-report-only")).toBe(false);
     expect(res.headers.get("cross-origin-resource-policy")).toBe("same-origin");
     expect(res.headers.get("content-type")).toBe("text/plain");
     expect(await res.text()).toBe("x");
@@ -93,7 +98,7 @@ describe("misc", () => {
 
   test("the CSP allows iroh relays in both hostname forms (with and without trailing dot)", () => {
     const connect = withSecurityHeaders(new Response("x")).headers
-      .get("content-security-policy-report-only")!
+      .get("content-security-policy")!
       .split("; ")
       .find((d) => d.startsWith("connect-src "))!
       .split(" ");

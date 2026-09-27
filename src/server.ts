@@ -383,7 +383,7 @@ const routes = {
 
     "/api/session/peers": { POST: members(registerPeer) },
 
-    /** Browsers report Content-Security-Policy violations here (the full policy is report-only for now). */
+    /** Browsers report Content-Security-Policy violations here; they're logged. */
     "/api/csp-report": {
       POST: async (req: Request, server: Bun.Server<undefined>) => {
         if (cspReportAllowed(clientOf(req, server))) {
