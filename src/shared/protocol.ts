@@ -38,7 +38,7 @@ export function signingBytes(e: AppEvent): Uint8Array {
       : e.k === "vote"
         ? [e.k, e.id, e.by, e.ts, e.songId, e.on]
         : e.k === "skip"
-          ? [e.k, e.id, e.by, e.ts, e.songId, e.round]
+          ? e.force ? [e.k, e.id, e.by, e.ts, e.songId, e.round, true] : [e.k, e.id, e.by, e.ts, e.songId, e.round]
           : e.k === "base"
             ? [e.k, e.id, e.by, e.ts, e.set, e.part, e.total, e.name, e.songs.map(songFields)]
             : e.k === "base-order"
@@ -73,7 +73,7 @@ export function validEvent(e: unknown, now: number): e is AppEvent {
   if (x.ts > now + MAX_FUTURE_MS) return false;
   if (x.k === "propose") return validSong(x.song);
   if (x.k === "vote") return str(x.songId, 32) && typeof x.on === "boolean";
-  if (x.k === "skip") return str(x.songId, 32) && Number.isInteger(x.round) && x.round >= 0;
+  if (x.k === "skip") return str(x.songId, 32) && Number.isInteger(x.round) && x.round >= 0 && (x.force === undefined || x.force === true);
   if (x.k === "end") return true;
   if (x.k === "base-order") return x.order === "shuffle" || x.order === "ordered";
   if (x.k === "mode") {

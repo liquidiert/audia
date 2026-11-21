@@ -207,6 +207,14 @@ export class Session {
     await this.emit({ k: "skip", songId: entry.song.id, round: entry.round });
   }
 
+  /** Skip the playing song right now, no votes needed (host only). */
+  async forceSkip() {
+    if (!this.isHost) throw new Error("Only the display that started this session can force a skip");
+    const entry = this.state().nowPlaying?.entry;
+    if (!entry) return;
+    await this.emit({ k: "skip", songId: entry.song.id, round: entry.round, force: true });
+  }
+
   /** Whether this browser founded the session and may end it. */
   get isHost() {
     return this.cfg.host === this.id;

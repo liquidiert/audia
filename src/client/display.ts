@@ -79,7 +79,24 @@ async function renderQr() {
   // Short URL: medium error correction still gives big, easy-to-scan modules.
   $("qr").innerHTML = renderSVG(url, { ecc: "M", border: 0 });
   $("qr-url").textContent = base.replace(/^https?:\/\//, "");
-  $("qr").onclick = () => window.open(url, "_blank");
+  $("qr").title = "Click to copy the session link";
+  $("qr").style.cursor = "pointer";
+  $("qr").onclick = async () => {
+    try {
+      await navigator.clipboard.writeText(url);
+    } catch {
+      const ta = document.createElement("textarea");
+      ta.value = url;
+      document.body.append(ta);
+      ta.select();
+      document.execCommand("copy");
+      ta.remove();
+    }
+    const el = $("qr-url");
+    const prev = base.replace(/^https?:\/\//, "");
+    el.textContent = "Link copied!";
+    setTimeout(() => (el.textContent = prev), 1500);
+  };
 }
 
 function renderStatus() {
@@ -452,12 +469,29 @@ $("base-remove").addEventListener("click", async () => {
 // --- ending the session ---
 
 $("end-session").addEventListener("click", async () => {
-  if (!confirm("End the session for everyone? Voting stops and the music ends. You can still save the playlist afterwards.")) return;
+  const host = session.isHost;
+  const msg = host
+    ? "End the session for everyone? Voting stops and the music ends. You can still save the playlist afterwards."
+    : "This browser didn't start the session, so it can't end it for everyone. Force close it anyway? The QR code stops working and a new session starts.";
+  if (!confirm(msg)) return;
+  if (host) {
+    // Never let a hung connection keep the session open: give up after a few seconds.
+    await Promise.race([session.end().catch((e) => console.error(e)), new Promise((r) => setTimeout(r, 5000))]);
+  }
+  // Stop handing the session out to new visitors, even if the end event didn't go out.
+  await fetch("/api/session", { method: "DELETE" }).catch(() => {});
+  if (!host) {
+    location.href = "/display";
+    return;
+  }
+  renderQr();
+  renderState();
+  tick();
+});
+
+$("force-skip").addEventListener("click", async () => {
   try {
-    await session.end();
-    // Stop handing the session out to new visitors.
-    await fetch("/api/session", { method: "DELETE" }).catch(() => {});
-    renderQr();
+    await session.forceSkip();
     renderState();
     tick();
   } catch (e) {
@@ -517,7 +551,7 @@ session = await Session.start(
   { host: fresh, role: "display" },
 );
 if (!session.isHost) {
-  for (const id of ["end-session", "base"]) {
+  for (const id of ["force-skip", "base"]) {
     const btn = $<HTMLButtonElement>(id);
     btn.disabled = true;
     btn.title = "Only the display (browser) that started this session can do this";

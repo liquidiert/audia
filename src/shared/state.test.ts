@@ -107,6 +107,13 @@ describe("skip votes", () => {
     expect(s.nowPlaying?.positionMs).toBe(500);
   });
 
+  test("a host force-skip ends the song at once; from anyone else it is a plain vote", () => {
+    const h = { ...c, host: "H" };
+    const f = (by: string): AppEvent => ({ ...skip("x", 0, by, 2000), force: true }) as AppEvent;
+    expect(derive([...base, f("H")], h, 3000).playlist[0]).toMatchObject({ skipped: true, endAt: 2000 });
+    expect(derive([...base, f("z")], h, 3000).playlist[0]!.skipped).toBe(false);
+  });
+
   test("duplicate voters count once; votes outside the playing window are ignored", () => {
     const s = derive(
       [
