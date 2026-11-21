@@ -113,9 +113,12 @@ export function derive(
     const i = playlist.findIndex((p) => p.round === e.round && p.song.id === e.songId);
     const entry = playlist[i];
     if (!entry || entry.skipped || e.ts < entry.startAt || e.ts >= entry.endAt) return;
-    if (entry.skippers.includes(e.by)) return;
-    entry.skippers.push(e.by);
-    if (entry.skippers.length < skipThreshold) return;
+    const forced = e.force === true && !!cfg.host && e.by === cfg.host;
+    if (!forced) {
+      if (entry.skippers.includes(e.by)) return;
+      entry.skippers.push(e.by);
+      if (entry.skippers.length < skipThreshold) return;
+    }
     entry.skipped = true;
     entry.endAt = e.ts;
     // Events arrive in time order, so later entries haven't started yet: just reflow them.

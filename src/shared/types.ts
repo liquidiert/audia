@@ -57,6 +57,8 @@ export interface SkipEvent extends EventBase {
   k: "skip";
   songId: string;
   round: number;
+  /** Host only: skips immediately, regardless of the vote threshold. */
+  force?: boolean;
 }
 
 /**
